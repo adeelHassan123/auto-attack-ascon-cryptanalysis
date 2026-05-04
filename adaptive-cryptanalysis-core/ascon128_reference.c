@@ -81,14 +81,86 @@ static void u64_to_bytes_be(uint64_t val, uint8_t bytes[8]) {
     bytes[7] = val & 0xFF;
 }
 
+/* ASCON-128 IV: 0x80400c0600000000 (NIST SP 800-232) */
+#define ASCON_128_IV 0x80400c0600000000ULL
+
 static void ascon_init(uint64_t state[5], const uint8_t key[16], const uint8_t nonce[16]) {
-    state[0] = 0x0000000000000040ULL;
+    state[0] = ASCON_128_IV;
     state[1] = bytes_to_u64be(key);
     state[2] = bytes_to_u64be(key + 8);
     state[3] = bytes_to_u64be(nonce);
     state[4] = bytes_to_u64be(nonce + 8);
     ascon_permutation(state, 12);
 }
+
+/*
+ * ASCON-128 Test Vectors from NIST SP 800-232
+ * 
+ * Test Case 1 (16-byte plaintext, no associated data):
+ * Key:    000102030405060708090A0B0C0D0E0F
+ * Nonce:  000102030405060708090A0B0C0D0E0F
+ * PT:     000102030405060708090A0B0C0D0E0F
+ * Expected Tag: E35592F01F5A0925B18A91F83D8738D7
+ */
+#ifdef TEST_VECTORS
+#include <stdio.h>
+#include <string.h>
+
+static void print_hex(const char *label, const uint8_t *data, size_t len) {
+    printf("%s: ", label);
+    for (size_t i = 0; i < len; i++) {
+        printf("%02x", data[i]);
+    }
+    printf("\n");
+}
+
+int ascon_test_vectors(void) {
+    /* NIST SP 800-232 Test Vector 1 */
+    const uint8_t key[16] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f
+    };
+    const uint8_t nonce[16] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f
+    };
+    const uint8_t plaintext[16] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f
+    };
+    /* Expected tag from NIST vectors */
+    const uint8_t expected_tag[16] = {
+        0xe3, 0x55, 0x92, 0xf0, 0x1f, 0x5a, 0x09, 0x25,
+        0xb1, 0x8a, 0x91, 0xf8, 0x3d, 0x87, 0x38, 0xd7
+    };
+    
+    uint8_t ciphertext[16];
+    uint8_t tag[16];
+    
+    printf("ASCON-128 Test Vector Verification\n");
+    printf("===================================\n");
+    
+    print_hex("Key    ", key, 16);
+    print_hex("Nonce  ", nonce, 16);
+    print_hex("PT     ", plaintext, 16);
+    
+    /* Run encryption */
+    ascon_encrypt(key, nonce, plaintext, 16, ciphertext, tag);
+    
+    print_hex("CT     ", ciphertext, 16);
+    print_hex("Tag    ", tag, 16);
+    print_hex("Exp Tag", expected_tag, 16);
+    
+    /* Verify tag */
+    if (memcmp(tag, expected_tag, 16) == 0) {
+        printf("\n[PASS] Test vector 1: Tag matches NIST specification\n");
+        return 0;
+    } else {
+        printf("\n[FAIL] Test vector 1: Tag mismatch!\n");
+        return 1;
+    }
+}
+#endif /* TEST_VECTORS */
 
 static void ascon_encrypt_block(uint64_t state[5], uint8_t *ciphertext, const uint8_t *plaintext) {
     uint64_t p = bytes_to_u64be(plaintext);
