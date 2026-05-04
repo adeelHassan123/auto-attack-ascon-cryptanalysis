@@ -11,27 +11,87 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 import h5py
 import argparse
+import subprocess
 from pathlib import Path
 
 # Rainbow imports
 try:
     from rainbow.generics import rainbow_arm
     from rainbow import TraceConfig, HammingWeight
+    RAINBOW_AVAILABLE = True
 except ImportError:
-    print("Error: Rainbow framework not installed.")
-    print("Install with: pip install rainbow")
-    sys.exit(1)
+    print("Warning: Rainbow framework not installed. Using fallback.")
+    print("Install with: pip install rainbow-py OR clone from GitHub")
+    RAINBOW_AVAILABLE = False
 
 from src.utils.metrics import hamming_weight_5bit, compute_ascon_sbox_hw, verify_hw_distribution
 
 
 # ASCON-128 constants
 ASCON_IV = 0x80400c0600000000
-KEY_ADDR = 0x20000000
-PT_ADDR = 0x20000010
-NONCE_ADDR = 0x20000020
-CT_ADDR = 0x20000030
-TAG_ADDR = 0x20000040
+
+# Memory layout for ARM Cortex-M3
+RAM_BASE = 0x20000000
+KEY_ADDR = 0x20000000       # 16 bytes
+PT_ADDR = 0x20000020       # 16 bytes
+NONCE_ADDR = 0x20000040    # 16 bytes
+CT_ADDR = 0x20000060       # 16 bytes
+TAG_ADDR = 0x20000080      # 16 bytes
+STACK_TOP = 0x20010000     # Top of stack
+
+# Default function address (can be overridden)
+DEFAULT_ASCON_ENCRYPT_ADDR = None  # Will be auto-detected from ELF
+
+
+def get_function_address(elf_path, func_name='ascon_encrypt'):
+    """Extract function address from ELF using objdump or symbols.
+    
+    Args:
+        elf_path: Path to ELF file
+        func_name: Function name to find
+        
+    Returns:
+        Address as integer or None if not found
+    """
+    # Try using objdump to get symbol address
+    try:
+        result = subprocess.run(
+            ['arm-none-eabi-objdump', '-t', elf_path],
+            capture_output=True, text=True, check=True
+        )
+        for line in result.stdout.split('\n'):
+            if func_name in line:
+                parts = line.split()
+                if len(parts) >= 2:
+                    try:
+                        addr = int(parts[0], 16)
+                        print(f"Found {func_name} at address: 0x{addr:08x}")
+                        return addr
+                    except ValueError:
+                        continue
+    except Exception as e:
+        print(f"Could not extract symbol address: {e}")
+    
+    # Fallback: try using readelf
+    try:
+        result = subprocess.run(
+            ['arm-none-eabi-readelf', '-s', elf_path],
+            capture_output=True, text=True, check=True
+        )
+        for line in result.stdout.split('\n'):
+            if func_name in line:
+                parts = line.split()
+                if len(parts) >= 8:
+                    try:
+                        addr = int(parts[1], 16)
+                        print(f"Found {func_name} at address: 0x{addr:08x} (via readelf)")
+                        return addr
+                    except ValueError:
+                        continue
+    except Exception as e:
+        print(f"Could not extract symbol via readelf: {e}")
+    
+    return None
 
 
 def setup_rainbow_emulator(elf_path='phase_2/ascon128-c/build/ascon128.elf'):
@@ -41,8 +101,12 @@ def setup_rainbow_emulator(elf_path='phase_2/ascon128-c/build/ascon128.elf'):
         elf_path: Path to ARM-compiled ASCON-128 binary
     
     Returns:
-        Rainbow emulator instance or None if not available
+        Tuple of (emulator instance, encrypt function address) or (None, None)
     """
+    if not RAINBOW_AVAILABLE:
+        print("Rainbow not available - using fallback")
+        return None, None
+        
     try:
         # Configure trace to capture register Hamming Weight
         trace_config = TraceConfig(register=HammingWeight())
@@ -52,15 +116,29 @@ def setup_rainbow_emulator(elf_path='phase_2/ascon128-c/build/ascon128.elf'):
         emu.load(elf_path, typ='elf')
         
         # Map memory regions for ARM Cortex-M3
-        RAM_BASE = 0x20000000
-        emu.emu.mem_map(RAM_BASE, 0x10000)  # 64KB RAM
+        emu.emu.mem_map(RAM_BASE, 0x20000)  # 128KB RAM
+        
+        # Get function address
+        enc_addr = get_function_address(elf_path, 'ascon_encrypt')
+        if enc_addr is None:
+            # Try alternative names
+            enc_addr = get_function_address(elf_path, 'ascon128_enc')
+        if enc_addr is None:
+            enc_addr = get_function_address(elf_path, 'encrypt')
+            
+        if enc_addr is None:
+            print("WARNING: Could not find ascon_encrypt symbol. Using fallback.")
+            print("The ELF may be stripped. Provide unstripped binary for full emulation.")
+            return emu, None
         
         print(f"Rainbow emulator initialized with {elf_path}")
-        return emu
+        print(f"Target function: ascon_encrypt at 0x{enc_addr:08x}")
+        return emu, enc_addr
+        
     except Exception as e:
         print(f"Warning: Could not initialize Rainbow emulator: {e}")
         print("Falling back to synthetic trace generation")
-        return None
+        return None, None
 
 
 def extract_sbox_hw_from_state(key_byte, pt_byte, nonce_byte=0):
@@ -79,11 +157,103 @@ def extract_sbox_hw_from_state(key_byte, pt_byte, nonce_byte=0):
     return compute_ascon_sbox_hw(pt_byte, key_byte, nonce_byte)
 
 
-def generate_ascon_trace(emu, key, plaintext, nonce):
-    """Generate single power trace from ASCON-128 execution.
+def generate_ascon_trace_full(emu, enc_addr, key, plaintext, nonce, noise_std=1.0):
+    """Generate power trace using FULL Rainbow emulation.
+    
+    Actually executes the ARM binary in the emulator and captures
+    register Hamming Weight leakage.
     
     Args:
         emu: Rainbow emulator instance
+        enc_addr: Address of ascon_encrypt function
+        key: 16-byte key
+        plaintext: 16-byte plaintext  
+        nonce: 16-byte nonce
+        noise_std: Standard deviation of Gaussian noise to add
+    
+    Returns:
+        trace: Power trace array from actual execution
+        sbox_hw: S-box output Hamming Weight (0-5)
+    """
+    # Reset emulator state
+    emu.reset()
+    
+    # Write inputs to emulated memory
+    emu[KEY_ADDR] = bytes(key)
+    emu[PT_ADDR] = bytes(plaintext)
+    emu[NONCE_ADDR] = bytes(nonce)
+    
+    # Clear output regions
+    emu[CT_ADDR] = b'\x00' * 16
+    emu[TAG_ADDR] = b'\x00' * 16
+    
+    # Setup ARM registers for function call
+    # Following ARM calling convention: r0=plaintext, r1=ciphertext, r2=key, r3=nonce
+    emu['r0'] = PT_ADDR      # plaintext input
+    emu['r1'] = CT_ADDR      # ciphertext output  
+    emu['r2'] = KEY_ADDR     # key
+    emu['r3'] = NONCE_ADDR   # nonce
+    
+    # Setup stack pointer
+    emu['sp'] = STACK_TOP
+    emu['lr'] = 0xFFFFFFFF   # Return address (will halt here)
+    
+    # Clear any previous trace
+    emu.trace = []
+    
+    # Execute the encryption function
+    # OR with 1 to set Thumb mode bit (Cortex-M3 uses Thumb-2)
+    try:
+        emu.start(enc_addr | 1, 0)
+        
+        # Extract trace from execution
+        if len(emu.trace) > 0:
+            # Get register Hamming Weight from each executed instruction
+            raw_trace = np.array([event.get("register", 0) for event in emu.trace], dtype=np.float32)
+            
+            # Add measurement noise (realistic)
+            if noise_std > 0:
+                noise = np.random.normal(0, noise_std, len(raw_trace))
+                trace = raw_trace + noise
+            else:
+                trace = raw_trace
+        else:
+            # No trace captured - fallback
+            print("Warning: No trace captured during execution")
+            trace = None
+            
+    except Exception as e:
+        print(f"Error during emulation: {e}")
+        trace = None
+    
+    # Calculate S-box HW for labeling (same as before)
+    sbox_hw = extract_sbox_hw_from_state(key[0], plaintext[0], nonce[0])
+    
+    # If trace is too short or empty, generate synthetic as fallback
+    if trace is None or len(trace) < 10:
+        print(f"  Using synthetic trace (execution trace length: {len(trace) if trace is not None else 0})")
+        trace = generate_synthetic_trace(sbox_hw, trace_length=1551)
+    else:
+        print(f"  Captured {len(trace)} samples from execution")
+        # Pad or truncate to standard length
+        target_length = 1551
+        if len(trace) < target_length:
+            # Pad with noise
+            padding = np.random.normal(np.mean(trace), np.std(trace), target_length - len(trace))
+            trace = np.concatenate([trace, padding])
+        elif len(trace) > target_length:
+            # Truncate
+            trace = trace[:target_length]
+    
+    return trace.astype(np.float32), sbox_hw
+
+
+def generate_ascon_trace(emu, enc_addr, key, plaintext, nonce):
+    """Wrapper to generate trace using Rainbow or fallback.
+    
+    Args:
+        emu: Rainbow emulator instance (or None)
+        enc_addr: Function address (or None)
         key: 16-byte key
         plaintext: 16-byte plaintext
         nonce: 16-byte nonce
@@ -92,26 +262,14 @@ def generate_ascon_trace(emu, key, plaintext, nonce):
         trace: Power trace array
         sbox_hw: S-box output Hamming Weight (0-5)
     """
-    # Reset emulator
-    emu.reset()
-    
-    # Write inputs to memory
-    emu[KEY_ADDR] = key
-    emu[PT_ADDR] = plaintext
-    emu[NONCE_ADDR] = nonce
-    
-    # TODO: Execute ASCON and extract trace
-    # This requires the ELF to have proper entry points
-    # For now, return synthetic trace based on S-box HW
-    
-    # Calculate target S-box HW using proper ASCON S-box
-    sbox_hw = extract_sbox_hw_from_state(key[0], plaintext[0])
-    
-    # TODO: When Rainbow fully integrated, extract actual trace from emulator
-    # For now, return synthetic trace based on computed HW
-    trace = generate_synthetic_trace(sbox_hw, trace_length=1551)
-    
-    return trace, sbox_hw
+    if emu is not None and enc_addr is not None:
+        # Use full Rainbow emulation
+        return generate_ascon_trace_full(emu, enc_addr, key, plaintext, nonce)
+    else:
+        # Fallback to synthetic
+        sbox_hw = extract_sbox_hw_from_state(key[0], plaintext[0], nonce[0])
+        trace = generate_synthetic_trace(sbox_hw, trace_length=1551)
+        return trace, sbox_hw
 
 
 def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True, 
@@ -127,7 +285,14 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
         target_byte: Which byte to target (0-15, default 0)
     """
     print(f"Setting up Rainbow emulator with {elf_path}")
-    emu = setup_rainbow_emulator(elf_path)
+    emu, enc_addr = setup_rainbow_emulator(elf_path)
+    
+    if emu is not None and enc_addr is not None:
+        print("✓ Using FULL Rainbow emulation with real ARM execution")
+    elif emu is not None:
+        print("⚠ Rainbow initialized but no function address found - will try fallback")
+    else:
+        print("⚠ Rainbow not available - using synthetic traces only")
     
     # Generate traces
     traces = []
@@ -159,15 +324,11 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
         # Compute ASCON S-box HW for target byte
         sbox_hw = extract_sbox_hw_from_state(key[target_byte], pt[target_byte], nonce[target_byte])
         
-        # Generate trace
-        if emu:
-            trace, sbox_hw_actual = generate_ascon_trace(emu, key, pt, nonce)
-            # Use actual HW from Rainbow if available
-            if sbox_hw_actual is not None:
-                sbox_hw = sbox_hw_actual
-        else:
-            # Fallback: synthetic trace based on S-box HW
-            trace = generate_synthetic_trace(sbox_hw, trace_length=1551)
+        # Generate trace using Rainbow or fallback
+        trace, sbox_hw_actual = generate_ascon_trace(emu, enc_addr, key, pt, nonce)
+        # Use actual HW from execution if returned
+        if sbox_hw_actual is not None:
+            sbox_hw = sbox_hw_actual
         
         traces.append(trace)
         plaintexts.append(pt)
@@ -250,6 +411,10 @@ if __name__ == '__main__':
                        help='Which byte to target (0-15)')
     parser.add_argument('--output', default='data/datasets/ascon_rainbow_dataset.h5',
                        help='Output HDF5 file')
+    parser.add_argument('--noise-std', type=float, default=1.0,
+                       help='Standard deviation of measurement noise')
+    parser.add_argument('--synthetic-only', action='store_true',
+                       help='Force synthetic traces (skip Rainbow)')
     args = parser.parse_args()
     
     np.random.seed(42)
