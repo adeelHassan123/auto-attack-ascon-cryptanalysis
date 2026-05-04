@@ -32,8 +32,11 @@ test: test_ascon_aead128
 arm:
 	arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -Wall -g -O2 \
 		-c $(SRC)/ascon_aead128.c -I$(INC) -o $(BUILD)/ascon_aead128_arm.o
+	arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -Wall -g -O2 \
+		-c $(SRC)/ascon_wrapper.c -I$(INC) -o $(BUILD)/ascon_wrapper_arm.o
 	arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -nostdlib \
-		-T flash.ld $(BUILD)/ascon_aead128_arm.o -o $(BUILD)/ascon128.elf
+		-T flash.ld $(BUILD)/ascon_aead128_arm.o $(BUILD)/ascon_wrapper_arm.o \
+		-o $(BUILD)/ascon128.elf
 
 # Create build directory
 $(BUILD)/:

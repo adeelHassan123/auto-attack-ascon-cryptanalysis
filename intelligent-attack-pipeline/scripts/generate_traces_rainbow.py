@@ -43,7 +43,7 @@ STACK_TOP = 0x20010000     # Top of stack
 DEFAULT_ASCON_ENCRYPT_ADDR = None  # Will be auto-detected from ELF
 
 
-def get_function_address(elf_path, func_name='ascon_encrypt'):
+def get_function_address(elf_path, func_name='ascon_encrypt_simple'):
     """Extract function address from ELF using objdump or symbols.
     
     Args:
@@ -53,6 +53,15 @@ def get_function_address(elf_path, func_name='ascon_encrypt'):
     Returns:
         Address as integer or None if not found
     """
+    # Try multiple function names
+    for name in [func_name, 'ascon_encrypt', 'ascon128_enc', 'encrypt']:
+        addr = _get_symbol_address(elf_path, name)
+        if addr:
+            return addr
+    return None
+
+
+def _get_symbol_address(elf_path, func_name):
     # Try using objdump to get symbol address
     try:
         result = subprocess.run(
@@ -118,21 +127,16 @@ def setup_rainbow_emulator(elf_path='phase_2/ascon128-c/build/ascon128.elf'):
         # Map memory regions for ARM Cortex-M3
         emu.emu.mem_map(RAM_BASE, 0x20000)  # 128KB RAM
         
-        # Get function address
-        enc_addr = get_function_address(elf_path, 'ascon_encrypt')
+        # Get function address - prefer ascon_encrypt_simple wrapper
+        enc_addr = get_function_address(elf_path, 'ascon_encrypt_simple')
+        
         if enc_addr is None:
-            # Try alternative names
-            enc_addr = get_function_address(elf_path, 'ascon128_enc')
-        if enc_addr is None:
-            enc_addr = get_function_address(elf_path, 'encrypt')
-            
-        if enc_addr is None:
-            print("WARNING: Could not find ascon_encrypt symbol. Using fallback.")
-            print("The ELF may be stripped. Provide unstripped binary for full emulation.")
+            print("WARNING: Could not find ascon_encrypt_simple symbol.")
+            print("Make sure to compile with the wrapper (make arm)")
             return emu, None
         
         print(f"Rainbow emulator initialized with {elf_path}")
-        print(f"Target function: ascon_encrypt at 0x{enc_addr:08x}")
+        print(f"Target function: ascon_encrypt_simple at 0x{enc_addr:08x}")
         return emu, enc_addr
         
     except Exception as e:
@@ -187,16 +191,22 @@ def generate_ascon_trace_full(emu, enc_addr, key, plaintext, nonce, noise_std=1.
     emu[CT_ADDR] = b'\x00' * 16
     emu[TAG_ADDR] = b'\x00' * 16
     
-    # Setup ARM registers for function call
-    # Following ARM calling convention: r0=plaintext, r1=ciphertext, r2=key, r3=nonce
-    emu['r0'] = PT_ADDR      # plaintext input
-    emu['r1'] = CT_ADDR      # ciphertext output  
-    emu['r2'] = KEY_ADDR     # key
-    emu['r3'] = NONCE_ADDR   # nonce
+    # Setup ARM registers for ascon_encrypt_simple function call
+    # Function signature: void ascon_encrypt_simple(key, nonce, pt, ct, tag)
+    # ARM calling convention (AAPCS): r0-r3 for first 4 args, rest on stack
+    emu['r0'] = KEY_ADDR     # key (16 bytes)
+    emu['r1'] = NONCE_ADDR   # nonce (16 bytes)
+    emu['r2'] = PT_ADDR      # plaintext (16 bytes)
+    emu['r3'] = CT_ADDR      # ciphertext output (16 bytes)
     
-    # Setup stack pointer
-    emu['sp'] = STACK_TOP
-    emu['lr'] = 0xFFFFFFFF   # Return address (will halt here)
+    # 5th argument (tag) goes on stack
+    # Stack grows downward, so push address then set SP
+    tag_stack_addr = STACK_TOP - 4
+    emu[tag_stack_addr:tag_stack_addr+4] = int(TAG_ADDR).to_bytes(4, 'little')
+    emu['sp'] = tag_stack_addr
+    
+    # Return address (where execution stops)
+    emu['lr'] = 0xFFFFFFFF   # Invalid address to trigger halt on return
     
     # Clear any previous trace
     emu.trace = []
@@ -352,7 +362,10 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
     split_idx = int(num_traces * 0.7)
     
     # Save to HDF5
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    # Ensure output directory exists
+    output_dir = os.path.dirname(output_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
     with h5py.File(output_path, 'w') as f:
         f.attrs['ascon_mode'] = True
         f.attrs['fixed_key'] = fixed_key
