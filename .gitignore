@@ -8,25 +8,14 @@ rainbow_env/
 # Python cache
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# VS Code settings (optional)
-.vscode/
-
-# OS junk
-.DS_Store
-
-# PyCharm and VSCode
+# IDE settings
 .idea/
 .vscode/
 
-# Byte-compiled files
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*~
-
-# MacOS and Linux temp files
+# OS junk
 .DS_Store
 *.swp
 *~
@@ -34,23 +23,30 @@ __pycache__/
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 
-# build outputs
+# Build outputs
 build/
 dist/
 *.egg-info/
 
-# HDF5 / large generated artifacts
+# Generated artifacts (large files)
 *.h5
-
-# ARM output artifacts
 *.elf
 *.bin
 *.o
+*.so
 *.map
+
+# Generated data and results (keep structure, ignore content)
+data/datasets/
+results/*
+!results/.gitkeep
 
 # Logs
 *.log
+transcript
 
-# Avoid tracking workspace internal caches
+# Workspace caches
 .workspaces
 Side-Chain-Analysis/rainbow/*
+
+docs/

@@ -1,0 +1,49 @@
+# Configuration for side-channel attacks
+
+# Dataset settings
+dataset:
+  num_profiling: 50000
+  num_attack: 10000
+  trace_length: 1551
+  
+# Model architectures
+models:
+  mlp:
+    fixed_key:
+      hidden_units: [256, 256]
+      dropout: 0.0
+      epochs: 50
+      batch_size: 256
+    variable_key:
+      hidden_units: [512, 512, 256]
+      dropout: 0.25
+      epochs: 70
+      batch_size: 256
+  
+  cnn:
+    fixed_key:
+      conv_filters: [64, 128]
+      kernel_sizes: [11, 7]
+      dense_units: [256]
+      dropout: 0.0
+      epochs: 50
+      batch_size: 256
+    variable_key:
+      conv_filters: [64, 128, 256]
+      kernel_sizes: [11, 7, 5]
+      dense_units: [512, 256]
+      dropout: 0.25
+      epochs: 70
+      batch_size: 256
+
+# Attack parameters
+attack:
+  target_byte: 0
+  num_classes: 9  # Hamming weight 0-8
+  
+# Output paths
+paths:
+  datasets: 'data/datasets'
+  models: 'results/models'
+  plots: 'results/plots'
+  logs: 'results/logs'
