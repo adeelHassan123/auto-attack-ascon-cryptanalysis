@@ -70,7 +70,7 @@ def compute_ascon_sbox_hw(pt_byte, key_byte, nonce_byte=0):
     - S-box operates on 5-bit column: (iv_bit, key_bit, key_bit2, nonce_bit, nonce_bit2)
     
     Simplified model for first byte (LSB column):
-    sbox_input = (pt_byte ^ key_byte) & 0x1F  # Lower 5 bits
+    sbox_input = (pt_byte ^ key_byte ^ nonce_byte) & 0x1F  # Lower 5 bits
     sbox_output = ASCON_SBOX[sbox_input]
     hw = hamming_weight_5bit(sbox_output)
     
@@ -82,9 +82,9 @@ def compute_ascon_sbox_hw(pt_byte, key_byte, nonce_byte=0):
     Returns:
         Hamming Weight of S-box output (0-5)
     """
-    # For the first byte, the S-box input depends on key XOR plaintext
-    # This is a simplified but accurate model for the first round
-    sbox_input = int((pt_byte ^ key_byte) & 0x1F)
+    # For the first byte, the simplified first-round S-box input uses
+    # plaintext, key, and nonce contributions in a consistent leakage model.
+    sbox_input = int((pt_byte ^ key_byte ^ nonce_byte) & 0x1F)
     
     # Apply ASCON S-box
     sbox_output = int(ASCON_SBOX[sbox_input])
@@ -107,8 +107,8 @@ def compute_ascon_sbox_hw_batch(pt_bytes, key_bytes, nonce_bytes=None):
     if nonce_bytes is None:
         nonce_bytes = np.zeros_like(pt_bytes)
     
-    # Vectorized computation
-    sbox_inputs = (pt_bytes ^ key_bytes) & 0x1F
+    # Vectorized computation (same model as compute_ascon_sbox_hw)
+    sbox_inputs = (pt_bytes ^ key_bytes ^ nonce_bytes) & 0x1F
     sbox_outputs = ASCON_SBOX[sbox_inputs]
     hws = ASCON_SBOX_HW[sbox_outputs]
     

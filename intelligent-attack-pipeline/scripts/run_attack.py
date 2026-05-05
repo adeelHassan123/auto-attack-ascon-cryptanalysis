@@ -37,24 +37,32 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
     
     print(f"Loading dataset: {datafile}")
     with h5py.File(datafile, 'r') as f:
+        target_byte = int(f.attrs.get('target_byte', 0))
         x = f['Profiling_traces/traces'][:]
         pt = f['Profiling_traces/metadata/plaintext'][:]
         key = f['Profiling_traces/metadata/key'][:]
+        nonce = f['Profiling_traces/metadata/nonce'][:] if 'nonce' in f['Profiling_traces/metadata'] else None
         
         x_attack = f['Attack_traces/traces'][:]
         pt_attack = f['Attack_traces/metadata/plaintext'][:]
         key_attack = f['Attack_traces/metadata/key'][:]
+        nonce_attack = f['Attack_traces/metadata/nonce'][:] if 'nonce' in f['Attack_traces/metadata'] else None
         
         # Check if dataset has sbox_hw labels
+        y = None
         if 'sbox_hw' in f['Profiling_traces/metadata']:
             print("  Using stored S-box HW labels from dataset")
+            y = f['Profiling_traces/metadata/sbox_hw'][:]
     
     # Set number of classes based on mode
     num_classes = 6 if ascon_mode else 9
     print(f"Using {'ASCON 5-bit S-box (6 classes)' if ascon_mode else 'Standard 8-bit (9 classes)'} mode")
     
-    # Generate labels
-    y = generate_labels(pt, key, target_byte=0, use_ascon_sbox=ascon_mode)
+    # Generate labels only if not stored in dataset
+    if y is None:
+        y = generate_labels(
+            pt, key, nonce=nonce, target_byte=target_byte, use_ascon_sbox=ascon_mode
+        )
     y_cat = to_categorical(y, num_classes=num_classes)
     
     print(f"  Label distribution: {np.bincount(y, minlength=num_classes)}")
@@ -109,8 +117,11 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
     
     # Key recovery
     if not variable_key:
-        fixed_key_byte = key_attack[0, 0]
-        rank, scores = key_recovery_from_predictions(preds_attack, pt_attack, fixed_key_byte, num_classes=num_classes)
+        fixed_key_byte = key_attack[0, target_byte]
+        rank, scores = key_recovery_from_predictions(
+            preds_attack, pt_attack, fixed_key_byte, nonce=nonce_attack,
+            target_byte=target_byte, num_classes=num_classes
+        )
         print(f"Fixed-key attack: true byte=0x{fixed_key_byte:02x}, rank={rank}")
         success_rate = 1.0 if rank == 0 else 0.0
         print(f"Success rate (rank 0): {success_rate*100:.2f}%")
@@ -119,6 +130,7 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
             'scenario': 'fixed-key',
             'model': model_type,
             'ascon_mode': ascon_mode,
+            'target_byte': int(target_byte),
             'true_key': int(fixed_key_byte),
             'rank': int(rank),
             'success_rate': float(success_rate),
@@ -127,7 +139,10 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
             'final_val_loss': float(history.history['val_loss'][-1])
         }
     else:
-        ranks = per_trace_variable_key_success(preds_attack, pt_attack, key_attack, num_classes=num_classes)
+        ranks = per_trace_variable_key_success(
+            preds_attack, pt_attack, key_attack, nonce=nonce_attack,
+            target_byte=target_byte, num_classes=num_classes
+        )
         stats = rank_statistics(ranks)
         
         print(f"Variable-key attack statistics:")
@@ -139,6 +154,7 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
             'scenario': 'variable-key',
             'model': model_type,
             'ascon_mode': ascon_mode,
+            'target_byte': int(target_byte),
             'epochs_trained': len(history.history['loss']),
             'final_val_acc': float(history.history['val_accuracy'][-1]),
             'final_val_loss': float(history.history['val_loss'][-1]),

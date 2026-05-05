@@ -15,12 +15,13 @@ for pt in range(256):
         KEY_RECOVERY_HW_TABLE[pt, k] = compute_ascon_sbox_hw(pt, k, 0)
 
 
-def generate_labels(pt, key, target_byte=0, use_ascon_sbox=True):
+def generate_labels(pt, key, nonce=None, target_byte=0, use_ascon_sbox=True):
     """Generate Hamming Weight labels for training.
     
     Args:
         pt: Plaintext array (N, 16)
         key: Key array (N, 16)
+        nonce: Nonce array (N, 16), optional
         target_byte: Which byte to attack (0-15)
         use_ascon_sbox: If True, use ASCON 5-bit S-box HW (0-5)
                        If False, use 8-bit HW (0-8)
@@ -29,25 +30,31 @@ def generate_labels(pt, key, target_byte=0, use_ascon_sbox=True):
         Hamming weight array (0-5 for ASCON)
     """
     if use_ascon_sbox:
-        # Use precomputed ASCON S-box HW table
-        labels = np.array([
-            KEY_RECOVERY_HW_TABLE[int(p), int(k)]
-            for p, k in zip(pt[:, target_byte], key[:, target_byte])
-        ])
-        return labels
+        if nonce is None:
+            # Backward-compatible fast path
+            return np.array([
+                KEY_RECOVERY_HW_TABLE[int(p), int(k)]
+                for p, k in zip(pt[:, target_byte], key[:, target_byte])
+            ])
+        return np.array([
+            compute_ascon_sbox_hw(int(p), int(k), int(n))
+            for p, k, n in zip(pt[:, target_byte], key[:, target_byte], nonce[:, target_byte])
+        ], dtype=np.uint8)
     else:
         # Standard 8-bit Hamming Weight (for comparison only)
         intermediate = np.bitwise_xor(pt[:, target_byte], key[:, target_byte])
         return hamming_weight(intermediate)
 
 
-def key_recovery_from_predictions(predictions, pt, true_key_byte, num_classes=6):
+def key_recovery_from_predictions(predictions, pt, true_key_byte, nonce=None, target_byte=0, num_classes=6):
     """Perform key recovery from model predictions (fixed-key scenario).
     
     Args:
         predictions: Model predictions (num_traces, num_classes)
         pt: Plaintext array (num_traces, 16)
         true_key_byte: The actual key byte value
+        nonce: Nonce array (num_traces, 16), optional
+        target_byte: Which byte to recover (0-15)
         num_classes: Number of HW classes (6 for ASCON 5-bit S-box, 9 for 8-bit)
     
     Returns:
@@ -59,12 +66,15 @@ def key_recovery_from_predictions(predictions, pt, true_key_byte, num_classes=6)
     
     for k in range(256):
         if num_classes == 6:
-            # ASCON 5-bit S-box: use lower 5 bits, HW 0-5
-            intermediate = np.bitwise_xor(pt[:, 0], k) & 0x1F
+            if nonce is None:
+                # Backward-compatible path
+                intermediate = np.bitwise_xor(pt[:, target_byte], k) & 0x1F
+            else:
+                intermediate = (pt[:, target_byte] ^ k ^ nonce[:, target_byte]) & 0x1F
             hw_hyp = hamming_weight_5bit_array(intermediate)
         else:
             # Standard 8-bit Hamming Weight
-            hw_hyp = hamming_weight(np.bitwise_xor(pt[:, 0], k))
+            hw_hyp = hamming_weight(np.bitwise_xor(pt[:, target_byte], k))
         
         probs = predictions[np.arange(num_traces), hw_hyp]
         key_scores[k] = np.sum(np.log(probs + 1e-36))
@@ -75,13 +85,15 @@ def key_recovery_from_predictions(predictions, pt, true_key_byte, num_classes=6)
     return int(true_rank), key_scores
 
 
-def per_trace_variable_key_success(predictions, pt, key_bytes, num_classes=6):
+def per_trace_variable_key_success(predictions, pt, key_bytes, nonce=None, target_byte=0, num_classes=6):
     """Evaluate success for variable-key scenario (per-trace key recovery).
     
     Args:
         predictions: Model predictions (N, num_classes)
         pt: Plaintext array (N, 16)
         key_bytes: True key bytes for each trace (N, 16)
+        nonce: Nonce array (N, 16), optional
+        target_byte: Which byte to recover (0-15)
         num_classes: Number of HW classes (6 for ASCON, 9 for 8-bit)
     
     Returns:
@@ -94,17 +106,19 @@ def per_trace_variable_key_success(predictions, pt, key_bytes, num_classes=6):
         score = np.zeros(256, dtype=np.float64)
         for k in range(256):
             if num_classes == 6:
-                # ASCON 5-bit S-box
-                intermediate = (int(pt[i, 0]) ^ k) & 0x1F
+                if nonce is None:
+                    intermediate = (int(pt[i, target_byte]) ^ k) & 0x1F
+                else:
+                    intermediate = (int(pt[i, target_byte]) ^ k ^ int(nonce[i, target_byte])) & 0x1F
                 hw = HW_TABLE_5BIT[intermediate]
             else:
                 # Standard 8-bit HW
-                hw = bin(int(pt[i, 0] ^ k)).count('1')
+                hw = bin(int(pt[i, target_byte] ^ k)).count('1')
             
             score[k] = np.log(predictions[i, hw] + 1e-36)
         
         rank = np.argsort(-score)
-        ranks[i] = np.where(rank == int(key_bytes[i, 0]))[0][0]
+        ranks[i] = np.where(rank == int(key_bytes[i, target_byte]))[0][0]
     
     return ranks
 
