@@ -12,9 +12,8 @@
 
 // Memory for single block encryption (avoids dynamic allocation)
 static EncryptionResult result;
-static CiphertextBlock ct_block;
-static DataBlock pt_block;
-static AssociatedDataBlock ad_block;
+static uint128_t ct_block;
+static uint128_t pt_block;
 
 /**
  * @brief Simple ASCON-128 encryption wrapper for SCA.

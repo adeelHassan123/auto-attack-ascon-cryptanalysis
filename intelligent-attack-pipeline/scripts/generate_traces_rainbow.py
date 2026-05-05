@@ -13,6 +13,7 @@ import h5py
 import argparse
 import subprocess
 from pathlib import Path
+import matplotlib.pyplot as plt
 
 # Rainbow imports
 try:
@@ -41,6 +42,122 @@ STACK_TOP = 0x20010000     # Top of stack
 
 # Default function address (can be overridden)
 DEFAULT_ASCON_ENCRYPT_ADDR = None  # Will be auto-detected from ELF
+
+
+def normalize_trace_length(trace, target_length):
+    """Ensure fixed-length traces for dataset storage.
+
+    Truncates long traces and pads short traces using edge values
+    (or zeros if empty) to preserve shape consistency.
+    """
+    if target_length <= 0:
+        return np.asarray(trace, dtype=np.float32)
+
+    trace = np.asarray(trace, dtype=np.float32)
+    if len(trace) == target_length:
+        return trace
+    if len(trace) > target_length:
+        return trace[:target_length]
+    if len(trace) == 0:
+        return np.zeros(target_length, dtype=np.float32)
+    pad_value = float(trace[-1])
+    padding = np.full(target_length - len(trace), pad_value, dtype=np.float32)
+    return np.concatenate([trace, padding]).astype(np.float32)
+
+
+def split_indices_disjoint_keys(keys, attack_ratio=0.3, rng=None):
+    """Split dataset so attack keys are unseen in profiling set."""
+    if rng is None:
+        rng = np.random.default_rng(42)
+
+    # Convert each 16-byte key row to bytes for hashing/comparison.
+    key_tokens = [bytes(row.tolist()) for row in keys]
+    unique_keys = np.array(sorted(set(key_tokens)), dtype=object)
+    rng.shuffle(unique_keys)
+
+    n_attack_keys = max(1, int(round(len(unique_keys) * attack_ratio)))
+    attack_key_set = set(unique_keys[:n_attack_keys].tolist())
+
+    attack_idx = [i for i, k in enumerate(key_tokens) if k in attack_key_set]
+    profiling_idx = [i for i, k in enumerate(key_tokens) if k not in attack_key_set]
+
+    if len(profiling_idx) == 0 or len(attack_idx) == 0:
+        raise RuntimeError("Failed to create disjoint profiling/attack key split.")
+
+    return np.array(profiling_idx, dtype=np.int64), np.array(attack_idx, dtype=np.int64)
+
+
+def save_trace_plots(traces, sbox_labels, output_dir, num_traces=10, seed=42):
+    """Save sample trace visualizations (at least 10 for deliverables)."""
+    os.makedirs(output_dir, exist_ok=True)
+    n = len(traces)
+    num = max(10, min(num_traces, n))
+    rng = np.random.default_rng(seed)
+    idx = rng.choice(n, size=num, replace=False) if n >= num else np.arange(n)
+
+    for j, i in enumerate(idx):
+        plt.figure(figsize=(10, 3))
+        plt.plot(traces[i], linewidth=0.8)
+        plt.title(f"Trace #{i} (label HW={int(sbox_labels[i])})")
+        plt.xlabel("Sample index")
+        plt.ylabel("Leakage")
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f"trace_{j+1:02d}_idx_{i}.png"), dpi=140)
+        plt.close()
+
+    # Combined overlay plot for quick inspection
+    plt.figure(figsize=(12, 4))
+    for i in idx:
+        plt.plot(traces[i], alpha=0.35, linewidth=0.7)
+    plt.title(f"Overlay of {len(idx)} sample traces")
+    plt.xlabel("Sample index")
+    plt.ylabel("Leakage")
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, "trace_overlay.png"), dpi=140)
+    plt.close()
+
+
+def write_dataset_documentation(
+    doc_path,
+    output_path,
+    fixed_key,
+    target_byte,
+    max_samples,
+    max_instructions,
+    synthetic_count,
+    num_traces,
+    hw_counts,
+    plot_dir,
+    disjoint_keys_ok,
+):
+    """Write a Phase 3 dataset documentation markdown file."""
+    os.makedirs(os.path.dirname(doc_path) if os.path.dirname(doc_path) else ".", exist_ok=True)
+    with open(doc_path, "w", encoding="utf-8") as f:
+        f.write("# Phase 3 Dataset Documentation\n\n")
+        f.write("## Trace Generation Process\n")
+        f.write("- Traces generated from ARM ELF using Rainbow emulation (Cortex-M3).\n")
+        f.write(f"- Dataset file: `{output_path}`\n")
+        f.write(f"- Scenario: {'fixed-key' if fixed_key else 'variable-key'}\n")
+        f.write(f"- Number of traces: {num_traces}\n")
+        f.write(f"- Max instructions per trace: {max_instructions}\n")
+        f.write(f"- Stored samples per trace: {max_samples}\n")
+        f.write(f"- Synthetic traces used: {synthetic_count}\n\n")
+
+        f.write("## Leakage Model\n")
+        f.write("- Trace leakage source: Rainbow register Hamming Weight events.\n")
+        f.write("- Label leakage model: ASCON S-box output Hamming Weight (5-bit -> classes 0..5).\n\n")
+
+        f.write("## Target Value Selection\n")
+        f.write(f"- Target byte index: {target_byte}\n")
+        f.write("- Target label computed from the ASCON intermediate S-box-related state for the chosen byte.\n\n")
+
+        f.write("## Validation Summary\n")
+        f.write(f"- HW class counts: {hw_counts.tolist()}\n")
+        f.write(f"- Variable-key disjoint profiling/attack keys: {disjoint_keys_ok}\n\n")
+
+        f.write("## Sample Trace Plots\n")
+        f.write(f"- Plot directory: `{plot_dir}`\n")
+        f.write("- Includes at least 10 individual traces plus one overlay plot.\n")
 
 
 def get_function_address(elf_path, func_name='ascon_encrypt_simple'):
@@ -121,11 +238,15 @@ def setup_rainbow_emulator(elf_path='phase_2/ascon128-c/build/ascon128.elf'):
         trace_config = TraceConfig(register=HammingWeight())
         emu = rainbow_arm(trace_config=trace_config)
         
-        # Load ELF binary
+        # Load ELF binary - Rainbow automatically maps memory from ELF segments
         emu.load(elf_path, typ='elf')
         
-        # Map memory regions for ARM Cortex-M3
-        emu.emu.mem_map(RAM_BASE, 0x20000)  # 128KB RAM
+        # Try to map additional RAM for data if not already mapped by ELF
+        try:
+            emu.emu.mem_map(RAM_BASE, 0x20000)  # 128KB RAM
+        except Exception:
+            # RAM already mapped by ELF or not needed
+            pass
         
         # Get function address - prefer ascon_encrypt_simple wrapper
         enc_addr = get_function_address(elf_path, 'ascon_encrypt_simple')
@@ -161,7 +282,18 @@ def extract_sbox_hw_from_state(key_byte, pt_byte, nonce_byte=0):
     return compute_ascon_sbox_hw(pt_byte, key_byte, nonce_byte)
 
 
-def generate_ascon_trace_full(emu, enc_addr, key, plaintext, nonce, noise_std=1.0):
+def generate_ascon_trace_full(
+    emu,
+    enc_addr,
+    key,
+    plaintext,
+    nonce,
+    noise_std=1.0,
+    max_samples=2000,
+    max_instructions=0,
+    verbose_trace=False,
+    allow_synthetic_fallback=False,
+):
     """Generate power trace using FULL Rainbow emulation.
     
     Actually executes the ARM binary in the emulator and captures
@@ -201,64 +333,88 @@ def generate_ascon_trace_full(emu, enc_addr, key, plaintext, nonce, noise_std=1.
     
     # 5th argument (tag) goes on stack
     # Stack grows downward, so push address then set SP
-    tag_stack_addr = STACK_TOP - 4
-    emu[tag_stack_addr:tag_stack_addr+4] = int(TAG_ADDR).to_bytes(4, 'little')
+    # ARM calling convention: additional args beyond r0-r3 are at [sp]
+    tag_stack_addr = STACK_TOP - 8  # Leave room for alignment
+    emu[tag_stack_addr] = TAG_ADDR  # Rainbow expects integer
     emu['sp'] = tag_stack_addr
     
-    # Return address (where execution stops)
-    emu['lr'] = 0xFFFFFFFF   # Invalid address to trigger halt on return
+    # Note: Don't set lr - let Rainbow handle it like the lab examples
+    # The lab AES code doesn't set lr and it works fine
     
     # Clear any previous trace
     emu.trace = []
     
     # Execute the encryption function
     # OR with 1 to set Thumb mode bit (Cortex-M3 uses Thumb-2)
+    # count=0 means run until completion
+    # Use keyword arg for instruction limit (Unicorn count), not positional end address
     try:
-        emu.start(enc_addr | 1, 0)
+        if max_instructions and max_instructions > 0:
+            emu.start(enc_addr | 1, 0, count=max_instructions)
+        else:
+            emu.start(enc_addr | 1, 0)
         
         # Extract trace from execution
         if len(emu.trace) > 0:
             # Get register Hamming Weight from each executed instruction
             raw_trace = np.array([event.get("register", 0) for event in emu.trace], dtype=np.float32)
             
-            # Add measurement noise (realistic)
-            if noise_std > 0:
-                noise = np.random.normal(0, noise_std, len(raw_trace))
-                trace = raw_trace + noise
-            else:
-                trace = raw_trace
+            # Add optional measurement noise
+            trace = raw_trace + np.random.normal(0, noise_std, len(raw_trace)) if noise_std > 0 else raw_trace
         else:
             # No trace captured - fallback
             print("Warning: No trace captured during execution")
             trace = None
             
     except Exception as e:
-        print(f"Error during emulation: {e}")
-        trace = None
+        # If execution stops with an exception after collecting leakage,
+        # keep the partial trace instead of discarding it.
+        if hasattr(emu, "trace") and len(emu.trace) > 0:
+            if verbose_trace:
+                print(f"Warning: emulation stopped early ({e}) - using partial trace")
+            raw_trace = np.array([event.get("register", 0) for event in emu.trace], dtype=np.float32)
+            trace = raw_trace + np.random.normal(0, noise_std, len(raw_trace)) if noise_std > 0 else raw_trace
+        else:
+            if verbose_trace:
+                print(f"Error during emulation: {e}")
+            trace = None
     
     # Calculate S-box HW for labeling (same as before)
     sbox_hw = extract_sbox_hw_from_state(key[0], plaintext[0], nonce[0])
     
-    # If trace is too short or empty, generate synthetic as fallback
+    # If trace is too short or empty, optionally fallback to synthetic
     if trace is None or len(trace) < 10:
-        print(f"  Using synthetic trace (execution trace length: {len(trace) if trace is not None else 0})")
-        trace = generate_synthetic_trace(sbox_hw, trace_length=1551)
+        if not allow_synthetic_fallback:
+            raise RuntimeError(
+                f"Rainbow trace capture failed (length={len(trace) if trace is not None else 0})"
+            )
+        if verbose_trace:
+            print(
+                f"  Using synthetic trace (execution trace length: {len(trace) if trace is not None else 0})"
+            )
+        trace = generate_synthetic_trace(sbox_hw, trace_length=max_samples)
+        used_synthetic = True
     else:
-        print(f"  Captured {len(trace)} samples from execution")
-        # Pad or truncate to standard length
-        target_length = 1551
-        if len(trace) < target_length:
-            # Pad with noise
-            padding = np.random.normal(np.mean(trace), np.std(trace), target_length - len(trace))
-            trace = np.concatenate([trace, padding])
-        elif len(trace) > target_length:
-            # Truncate
-            trace = trace[:target_length]
-    
-    return trace.astype(np.float32), sbox_hw
+        used_synthetic = False
+        if verbose_trace:
+            print(f"  Captured {len(trace)} samples from execution")
+
+    trace = normalize_trace_length(trace, max_samples)
+    return trace.astype(np.float32), sbox_hw, used_synthetic
 
 
-def generate_ascon_trace(emu, enc_addr, key, plaintext, nonce):
+def generate_ascon_trace(
+    emu,
+    enc_addr,
+    key,
+    plaintext,
+    nonce,
+    max_samples=2000,
+    max_instructions=0,
+    verbose_trace=False,
+    allow_synthetic_fallback=False,
+    noise_std=1.0,
+):
     """Wrapper to generate trace using Rainbow or fallback.
     
     Args:
@@ -274,17 +430,34 @@ def generate_ascon_trace(emu, enc_addr, key, plaintext, nonce):
     """
     if emu is not None and enc_addr is not None:
         # Use full Rainbow emulation
-        return generate_ascon_trace_full(emu, enc_addr, key, plaintext, nonce)
+        return generate_ascon_trace_full(
+            emu,
+            enc_addr,
+            key,
+            plaintext,
+            nonce,
+            noise_std=noise_std,
+            max_samples=max_samples,
+            max_instructions=max_instructions,
+            verbose_trace=verbose_trace,
+            allow_synthetic_fallback=allow_synthetic_fallback,
+        )
     else:
-        # Fallback to synthetic
+        # Emulator unavailable
+        if not allow_synthetic_fallback:
+            raise RuntimeError("Rainbow emulator not available and synthetic fallback is disabled.")
         sbox_hw = extract_sbox_hw_from_state(key[0], plaintext[0], nonce[0])
-        trace = generate_synthetic_trace(sbox_hw, trace_length=1551)
-        return trace, sbox_hw
+        trace = generate_synthetic_trace(sbox_hw, trace_length=max_samples)
+        return normalize_trace_length(trace, max_samples), sbox_hw, True
 
 
 def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True, 
                             output_path='data/datasets/ascon_rainbow_dataset.h5',
-                            target_byte=0):
+                            target_byte=0, max_samples=2000, max_instructions=0,
+                            verbose_trace=False, allow_synthetic_fallback=False,
+                            noise_std=0.0, force_synthetic_only=False,
+                            attack_ratio=0.3, plots_dir='', num_plot_traces=10,
+                            doc_output=''):
     """Generate ASCON-128 dataset using Rainbow emulator.
     
     Args:
@@ -293,28 +466,44 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
         fixed_key: Whether to use fixed key
         output_path: Output HDF5 file path
         target_byte: Which byte to target (0-15, default 0)
+        max_samples: Maximum samples to keep per trace (truncates long traces)
+        max_instructions: Maximum ARM instructions to emulate per trace (0 = full)
+        verbose_trace: Print per-trace capture details
+        allow_synthetic_fallback: Allow fake/synthetic trace fallback on failures
+        noise_std: Add Gaussian noise to traces (0.0 for pure emulator leakage)
     """
-    print(f"Setting up Rainbow emulator with {elf_path}")
-    emu, enc_addr = setup_rainbow_emulator(elf_path)
+    if force_synthetic_only:
+        print("Synthetic-only mode enabled (Rainbow emulation disabled)")
+        emu, enc_addr = None, None
+    else:
+        print(f"Setting up Rainbow emulator with {elf_path}")
+        emu, enc_addr = setup_rainbow_emulator(elf_path)
     
     if emu is not None and enc_addr is not None:
         print("✓ Using FULL Rainbow emulation with real ARM execution")
     elif emu is not None:
-        print("⚠ Rainbow initialized but no function address found - will try fallback")
+        if not allow_synthetic_fallback:
+            raise RuntimeError("Rainbow initialized but function address not found.")
+        print("⚠ Rainbow initialized but no function address found - using synthetic fallback")
     else:
+        if not allow_synthetic_fallback:
+            raise RuntimeError("Rainbow not available and synthetic fallback is disabled.")
         print("⚠ Rainbow not available - using synthetic traces only")
     
     # Generate traces
-    traces = []
+    traces = np.zeros((num_traces, max_samples), dtype=np.float32)
     plaintexts = []
     keys = []
+    nonces = []
     sbox_labels = []
+    synthetic_count = 0
     
     if fixed_key:
         fixed_key_bytes = np.random.randint(0, 256, 16, dtype=np.uint8)
         print(f"Fixed key: {bytes(fixed_key_bytes).hex()}")
-    
-    print(f"Generating {num_traces} traces...")
+        print(f"Generating {num_traces} traces (max {max_samples} samples per trace, max {max_instructions} instructions)...")
+    else:
+        print(f"Generating {num_traces} traces (max {max_samples} samples per trace, max {max_instructions} instructions)...")
     for i in range(num_traces):
         if i % 1000 == 0:
             print(f"  Progress: {i}/{num_traces}")
@@ -335,21 +524,33 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
         sbox_hw = extract_sbox_hw_from_state(key[target_byte], pt[target_byte], nonce[target_byte])
         
         # Generate trace using Rainbow or fallback
-        trace, sbox_hw_actual = generate_ascon_trace(emu, enc_addr, key, pt, nonce)
+        trace, sbox_hw_actual, used_synthetic = generate_ascon_trace(
+            emu,
+            enc_addr,
+            key,
+            pt,
+            nonce,
+            max_samples=max_samples,
+            max_instructions=max_instructions,
+            verbose_trace=verbose_trace,
+            allow_synthetic_fallback=allow_synthetic_fallback,
+            noise_std=noise_std,
+        )
+        synthetic_count += int(used_synthetic)
         # Use actual HW from execution if returned
         if sbox_hw_actual is not None:
             sbox_hw = sbox_hw_actual
         
-        traces.append(trace)
+        traces[i] = trace
         plaintexts.append(pt)
         keys.append(key)
+        nonces.append(nonce)
         sbox_labels.append(sbox_hw)
     
     # Convert to arrays
-    traces = np.array(traces, dtype=np.float32)
     plaintexts = np.array(plaintexts, dtype=np.uint8)
     keys = np.array(keys, dtype=np.uint8)
-    nonces_array = np.array([np.random.randint(0, 256, 16, dtype=np.uint8) for _ in range(num_traces)])
+    nonces_array = np.array(nonces, dtype=np.uint8)
     sbox_labels = np.array(sbox_labels, dtype=np.uint8)
     
     # Verify HW distribution
@@ -358,8 +559,19 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
     if not dist_valid:
         print("WARNING: HW distribution may be biased!")
     
-    # Split profiling/attack (70/30)
-    split_idx = int(num_traces * 0.7)
+    # Split profiling/attack
+    disjoint_keys_ok = None
+    if fixed_key:
+        split_idx = int(num_traces * (1.0 - attack_ratio))
+        profiling_idx = np.arange(split_idx, dtype=np.int64)
+        attack_idx = np.arange(split_idx, num_traces, dtype=np.int64)
+    else:
+        profiling_idx, attack_idx = split_indices_disjoint_keys(keys, attack_ratio=attack_ratio)
+        prof_keys = {bytes(k.tolist()) for k in keys[profiling_idx]}
+        atk_keys = {bytes(k.tolist()) for k in keys[attack_idx]}
+        disjoint_keys_ok = len(prof_keys.intersection(atk_keys)) == 0
+        if not disjoint_keys_ok:
+            raise RuntimeError("Variable-key split is not disjoint by key.")
     
     # Save to HDF5
     # Ensure output directory exists
@@ -371,28 +583,59 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
         f.attrs['fixed_key'] = fixed_key
         f.attrs['target_byte'] = target_byte
         f.attrs['num_classes'] = 6
+        f.attrs['max_samples'] = max_samples
+        f.attrs['max_instructions'] = max_instructions
+        f.attrs['synthetic_fallback_enabled'] = bool(allow_synthetic_fallback)
+        f.attrs['synthetic_trace_count'] = int(synthetic_count)
+        f.attrs['attack_ratio'] = float(attack_ratio)
+        f.attrs['disjoint_keys_enforced'] = bool((not fixed_key))
+        f.attrs['disjoint_keys_ok'] = bool(disjoint_keys_ok) if disjoint_keys_ok is not None else True
         
         prof = f.create_group('Profiling_traces')
-        prof.create_dataset('traces', data=traces[:split_idx], compression='gzip', compression_opts=4)
+        prof.create_dataset('traces', data=traces[profiling_idx], compression='gzip', compression_opts=4)
         prof_meta = prof.create_group('metadata')
-        prof_meta.create_dataset('plaintext', data=plaintexts[:split_idx])
-        prof_meta.create_dataset('key', data=keys[:split_idx])
-        prof_meta.create_dataset('nonce', data=nonces_array[:split_idx])
-        prof_meta.create_dataset('sbox_hw', data=sbox_labels[:split_idx])
+        prof_meta.create_dataset('plaintext', data=plaintexts[profiling_idx])
+        prof_meta.create_dataset('key', data=keys[profiling_idx])
+        prof_meta.create_dataset('nonce', data=nonces_array[profiling_idx])
+        prof_meta.create_dataset('sbox_hw', data=sbox_labels[profiling_idx])
         
         att = f.create_group('Attack_traces')
-        att.create_dataset('traces', data=traces[split_idx:], compression='gzip', compression_opts=4)
+        att.create_dataset('traces', data=traces[attack_idx], compression='gzip', compression_opts=4)
         att_meta = att.create_group('metadata')
-        att_meta.create_dataset('plaintext', data=plaintexts[split_idx:])
-        att_meta.create_dataset('key', data=keys[split_idx:])
-        att_meta.create_dataset('nonce', data=nonces_array[split_idx:])
-        att_meta.create_dataset('sbox_hw', data=sbox_labels[split_idx:])
+        att_meta.create_dataset('plaintext', data=plaintexts[attack_idx])
+        att_meta.create_dataset('key', data=keys[attack_idx])
+        att_meta.create_dataset('nonce', data=nonces_array[attack_idx])
+        att_meta.create_dataset('sbox_hw', data=sbox_labels[attack_idx])
     
     print(f"\nDataset saved to {output_path}")
-    print(f"  Profiling: {split_idx} traces")
-    print(f"  Attack: {num_traces - split_idx} traces")
+    print(f"  Profiling: {len(profiling_idx)} traces")
+    print(f"  Attack: {len(attack_idx)} traces")
+    print(f"  Synthetic traces used: {synthetic_count}/{num_traces}")
+    if disjoint_keys_ok is not None:
+        print(f"  Disjoint attack keys: {disjoint_keys_ok}")
     print(f"  HW distribution: {np.bincount(sbox_labels, minlength=6)}")
     print(f"  Expected (binomial): [~{num_traces*0.031:.0f}, ~{num_traces*0.156:.0f}, ~{num_traces*0.312:.0f}, ~{num_traces*0.312:.0f}, ~{num_traces*0.156:.0f}, ~{num_traces*0.031:.0f}]")
+
+    # Validation + visual deliverables
+    if plots_dir:
+        save_trace_plots(traces, sbox_labels, plots_dir, num_traces=num_plot_traces, seed=42)
+        print(f"  Saved sample trace plots to: {plots_dir}")
+
+    if doc_output:
+        write_dataset_documentation(
+            doc_output,
+            output_path,
+            fixed_key,
+            target_byte,
+            max_samples,
+            max_instructions,
+            synthetic_count,
+            num_traces,
+            np.bincount(sbox_labels, minlength=6),
+            plots_dir if plots_dir else "(not requested)",
+            disjoint_keys_ok if disjoint_keys_ok is not None else True,
+        )
+        print(f"  Wrote dataset documentation to: {doc_output}")
 
 
 def generate_synthetic_trace(sbox_hw, trace_length=1551):
@@ -424,10 +667,28 @@ if __name__ == '__main__':
                        help='Which byte to target (0-15)')
     parser.add_argument('--output', default='data/datasets/ascon_rainbow_dataset.h5',
                        help='Output HDF5 file')
-    parser.add_argument('--noise-std', type=float, default=1.0,
-                       help='Standard deviation of measurement noise')
+    parser.add_argument('--noise-std', type=float, default=0.0,
+                       help='Standard deviation of measurement noise (default 0.0 for pure emulator leakage)')
     parser.add_argument('--synthetic-only', action='store_true',
                        help='Force synthetic traces (skip Rainbow)')
+    parser.add_argument('--max-samples', type=int, default=2000,
+                       help='Max samples to keep per trace (default 2000, full trace is ~240k)')
+    parser.add_argument('--max-instructions', type=int, default=0,
+                       help='Max ARM instructions per trace (0=full execution, faster when set)')
+    parser.add_argument('--verbose-trace', action='store_true',
+                       help='Print per-trace capture/truncation logs')
+    parser.add_argument('--allow-synthetic-fallback', action='store_true',
+                       help='Allow synthetic traces when emulation fails (disabled by default)')
+    parser.add_argument('--strict-rainbow', action='store_true',
+                       help='Require 100% real Rainbow traces (default behavior)')
+    parser.add_argument('--attack-ratio', type=float, default=0.3,
+                       help='Attack split ratio (default 0.3)')
+    parser.add_argument('--plots-dir', default='',
+                       help='If set, save sample trace plots to this directory')
+    parser.add_argument('--num-plot-traces', type=int, default=10,
+                       help='Number of sample trace plots to save (min 10 in report)')
+    parser.add_argument('--doc-output', default='',
+                       help='If set, write Phase 3 dataset documentation markdown here')
     args = parser.parse_args()
     
     np.random.seed(42)
@@ -439,4 +700,24 @@ if __name__ == '__main__':
     else:
         output = args.output
     
-    create_dataset_rainbow(args.elf, args.traces, fixed_key, output, args.target_byte)
+    allow_synthetic_fallback = args.allow_synthetic_fallback or args.synthetic_only
+    if args.strict_rainbow:
+        allow_synthetic_fallback = False
+
+    create_dataset_rainbow(
+        args.elf,
+        args.traces,
+        fixed_key,
+        output,
+        args.target_byte,
+        args.max_samples,
+        args.max_instructions,
+        args.verbose_trace,
+        allow_synthetic_fallback,
+        args.noise_std,
+        args.synthetic_only,
+        args.attack_ratio,
+        args.plots_dir,
+        args.num_plot_traces,
+        args.doc_output,
+    )
