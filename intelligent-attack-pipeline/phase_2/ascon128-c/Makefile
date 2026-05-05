@@ -30,7 +30,7 @@ test: test_ascon_aead128
 
 # ARM Cortex-M3 compilation (for side-channel analysis)
 arm:
-	arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -Wall -g -O2 \
+	arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -Wall -g -O2 -fno-builtin-memset \
 		-c $(SRC)/ascon_aead128.c -I$(INC) -o $(BUILD)/ascon_aead128_arm.o
 	arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -Wall -g -O2 \
 		-c $(SRC)/ascon_wrapper.c -I$(INC) -o $(BUILD)/ascon_wrapper_arm.o
@@ -46,7 +46,7 @@ $(BUILD)/:
 .PHONY: clean mrproper
 
 clean:
-	rm -rf $(BUILD)/*.o $(BUILD)/*.a
+	rm -rf $(BUILD)/* 
 
 mrproper: clean
 	rm -rf $(BUILD)/

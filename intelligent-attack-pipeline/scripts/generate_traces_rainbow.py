@@ -312,7 +312,7 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
     
     if fixed_key:
         fixed_key_bytes = np.random.randint(0, 256, 16, dtype=np.uint8)
-        print(f"Fixed key: {fixed_key_bytes.hex()}")
+        print(f"Fixed key: {bytes(fixed_key_bytes).hex()}")
     
     print(f"Generating {num_traces} traces...")
     for i in range(num_traces):

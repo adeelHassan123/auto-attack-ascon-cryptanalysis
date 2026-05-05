@@ -6,15 +6,16 @@
 static uint8_t heap[HEAP_SIZE];
 static uint32_t heap_used = 0;
 
-void *memset(void *s, int c, size_t n) {
-    uint8_t *ptr = (uint8_t *)s;
-    for (size_t i = 0; i < n; i++) {
-        ptr[i] = (uint8_t)c;
+static void *embedded_memset(void *s, int c, size_t n);
+static void *embedded_memset(void *s, int c, size_t n) {
+    volatile uint8_t *ptr = (volatile uint8_t *)s;
+    while (n-- > 0) {
+        *ptr++ = (uint8_t)c;
     }
     return s;
 }
 
-void *calloc(size_t nmemb, size_t size) {
+static void *embedded_calloc(size_t nmemb, size_t size) {
     size_t total_size = nmemb * size;
     if (heap_used + total_size > HEAP_SIZE) {
         return NULL;
@@ -22,11 +23,11 @@ void *calloc(size_t nmemb, size_t size) {
     void *ptr = &heap[heap_used];
     heap_used += total_size;
     // Zero out the memory
-    memset(ptr, 0, total_size);
+    embedded_memset(ptr, 0, total_size);
     return ptr;
 }
 
-void free(void *ptr) {
+static void embedded_free(void *ptr) {
     // Simple no-op free for embedded - memory is not reclaimed
     (void)ptr;
 }
@@ -72,14 +73,14 @@ uint8_t init_enc_result(EncryptionResult **result, uint64_t size) {
         return 1;
     }
 
-    *result = calloc(1, sizeof(EncryptionResult));
+    *result = embedded_calloc(1, sizeof(EncryptionResult));
     if (*result == NULL) {
         return 1;
     }
 
-    (*result)->ciphertext.arr = calloc(size, sizeof(uint128_t));
+    (*result)->ciphertext.arr = embedded_calloc(size, sizeof(uint128_t));
     if ((*result)->ciphertext.arr == NULL) {
-        free(*result);
+        embedded_free(*result);
         *result = NULL;
         return 1;
     }
@@ -101,14 +102,14 @@ uint8_t init_dec_result(DecryptionResult **result, uint64_t size) {
         return 1;
     }
 
-    *result = calloc(1, sizeof(DecryptionResult));
+    *result = embedded_calloc(1, sizeof(DecryptionResult));
     if (*result == NULL) {
         return 1;
     }
 
-    (*result)->plaintext.arr = calloc(size, sizeof(uint128_t));
+    (*result)->plaintext.arr = embedded_calloc(size, sizeof(uint128_t));
     if ((*result)->plaintext.arr == NULL) {
-        free(*result);
+        embedded_free(*result);
         *result = NULL;
         return 1;
     }
@@ -139,14 +140,14 @@ void free_encryption_result(EncryptionResult *result) {
                 result->ciphertext.arr[i] = (uint128_t){UINT64_C(0), UINT64_C(0)};
             }
             // free memory
-            free(result->ciphertext.arr);
+            embedded_free(result->ciphertext.arr);
             // set pointer to NULL to avoid dangling pointer
             result->ciphertext.arr = NULL;
         }
         // erase data
         result->tag = (uint128_t){UINT64_C(0), UINT64_C(0)};
         // free memory
-        free(result);
+        embedded_free(result);
     }
 }
 
@@ -170,14 +171,14 @@ void free_decryption_result(DecryptionResult *result) {
                 result->plaintext.arr[i] = (uint128_t){UINT64_C(0), UINT64_C(0)};
             }
             // free memory
-            free(result->plaintext.arr);
+            embedded_free(result->plaintext.arr);
             // set pointer to NULL to avoid dangling pointer
             result->plaintext.arr = NULL;
         }
         // erase data
         result->valid = DECRYPTION_NOT_VALID;
         // free memory
-        free(result);
+        embedded_free(result);
     }
 }
 
