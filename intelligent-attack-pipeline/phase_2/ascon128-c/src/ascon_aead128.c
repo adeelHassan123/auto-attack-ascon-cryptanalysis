@@ -1,6 +1,36 @@
 #include <stdlib.h>
 #include "../inc/ascon_aead128.h"
 
+// Minimal heap implementation for embedded systems
+#define HEAP_SIZE 4096
+static uint8_t heap[HEAP_SIZE];
+static uint32_t heap_used = 0;
+
+void *memset(void *s, int c, size_t n) {
+    uint8_t *ptr = (uint8_t *)s;
+    for (size_t i = 0; i < n; i++) {
+        ptr[i] = (uint8_t)c;
+    }
+    return s;
+}
+
+void *calloc(size_t nmemb, size_t size) {
+    size_t total_size = nmemb * size;
+    if (heap_used + total_size > HEAP_SIZE) {
+        return NULL;
+    }
+    void *ptr = &heap[heap_used];
+    heap_used += total_size;
+    // Zero out the memory
+    memset(ptr, 0, total_size);
+    return ptr;
+}
+
+void free(void *ptr) {
+    // Simple no-op free for embedded - memory is not reclaimed
+    (void)ptr;
+}
+
 const uint8_t ROUND_CONSTANT[16] = {
     0x3C, 0x2D, 0x1E, 0x0F, 0xF0, 0xE1, 0xD2, 0xC3,
     0xB4, 0xA5, 0x96, 0x87, 0x78, 0x69, 0x5A, 0x4B,
