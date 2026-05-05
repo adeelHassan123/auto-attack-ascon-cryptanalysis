@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auto-attack-ascon-cryptanalysis"
+version = "0.1.0"
+description = "Intelligent attack pipeline for ASCON-128 side-channel analysis"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+authors = [
+    { name = "Adeel Hassan" },
+]
+dependencies = [
+    "tensorflow",
+    "numpy",
+    "h5py",
+    "scikit-learn",
+    "matplotlib",
+    "pandas",
+]
+
+[project.urls]
+Homepage = "https://github.com/adeelHassan123/auto-attack-ascon-cryptanalysis"
+
+[tool.setuptools]
+package-dir = {"" = "intelligent-attack-pipeline"}
+
+[tool.setuptools.packages.find]
+where = ["intelligent-attack-pipeline"]
