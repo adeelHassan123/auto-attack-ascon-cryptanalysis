@@ -1,53 +1,40 @@
 # ASCON-128 Side-Channel Analysis Pipeline
 
-**Production-ready deep learning framework for ASCON-128 side-channel attacks with Rainbow emulation.**
+**Verified ASCON-128 side-channel attack implementation with Rainbow emulation.**
 
-This project implements a complete cryptanalysis pipeline: from ASCON-128 C implementation, through Rainbow-based power trace generation, to MLP vs CNN comparative analysis with honest evaluation.
+Complete cryptanalysis pipeline: NIST-verified C implementation → Rainbow trace generation → Deep learning attack with correct ASCON S-box modeling.
 
-## ⚠️ Critical Features
+## ⚠️ Critical Fixes Applied
 
-- ✅ **ASCON 5-bit S-box only**: HW ∈ {0,1,2,3,4,5} (6 classes) - NOT 8-bit
-- ✅ **Rainbow trace generation**: Real ARM emulation with register HW leakage
-- ✅ **Truthful reporting**: Actual success rates, no fabricated results
-- ✅ **Overfitting prevention**: Dropout, early stopping, LR scheduling
-- ✅ **Reproducible**: Fixed random seeds (42) throughout
+- ✅ **S-box bit order corrected**: state[0]=MSB (bit 4), state[4]=LSB (bit 0)
+- ✅ **NIST SP 800-232 verified**: Test vectors pass
+- ✅ **num_classes = 6**: Correct for 5-bit S-box HW (0-5)
+- ✅ **No synthetic fallback**: Rainbow required (no fake traces)
+- ✅ **metrics_fixed.py**: Correct ASCON state simulation
+- ✅ **key_recovery.py**: Real ASCON sponge state, not XOR model
 
-## 📁 Project Structure
+## 📁 Project Structure (Cleaned)
 
 ```
 intelligent-attack-pipeline/
-├── src/                          # Modular Python source
-│   ├── __init__.py              # Package init with version
+├── src/
 │   ├── models/                   # Neural architectures
-│   │   ├── __init__.py
 │   │   ├── mlp.py               # Multi-Layer Perceptron (6-class)
 │   │   └── cnn.py               # 1D CNN (6-class)
-│   ├── attacks/                  # Attack implementations
-│   │   ├── __init__.py
-│   │   └── key_recovery.py      # ASCON-specific key recovery
-│   ├── dataset/                  # Dataset generation
-│   │   ├── __init__.py
-│   │   └── generator.py         # ASCAD-compatible HDF5 generator
-│   └── utils/                    # Utilities
-│       ├── __init__.py
-│       └── metrics.py            # 5-bit S-box HW calculation
-├── scripts/                      # Entry points
-│   ├── run_attack.py            # Train & attack (MLP/CNN)
-│   ├── generate_traces_rainbow.py # Rainbow-based trace generation
-│   └── comparative_analysis.py  # MLP vs CNN comparison with stats
-├── phase_2/                      # ASCON-128 C implementation
-│   └── ascon128-c/
-│       ├── inc/ascon_aead128.h  # Header with test vectors
-│       ├── src/ascon_aead128.c  # Core implementation
-│       ├── tests/test_ascon_aead128.c # Unit tests
-│       ├── flash.ld             # ARM linker script
-│       └── Makefile             # Build system
+│   ├── attacks/
+│   │   └── key_recovery.py      # ASCON simulation (fixed)
+│   └── utils/
+│       └── metrics_fixed.py     # Correct S-box HW calculation
+├── scripts/
+│   ├── generate_traces_rainbow.py # No synthetic fallback
+│   ├── train_models.py          # Training entry point
+│   └── perform_attack.py        # Attack entry point
 ├── config/
-│   └── attack_config.yaml       # Hyperparameters
-├── data/datasets/                # Generated HDF5 files (gitignored)
-├── results/                      # Models, plots, logs (gitignored)
-└── requirements.txt             # Python dependencies
+│   └── attack_config.yaml       # num_classes: 6
+└── data/datasets/               # Generated HDF5 files
 ```
+
+**Note:** Old `metrics.py` deleted. Only `metrics_fixed.py` remains.
 
 ## 🚀 Step-by-Step Execution
 
@@ -72,25 +59,32 @@ arm-none-eabi-gcc --version  # Should show 9.0+ or 13.0+
 python -c "from rainbow.generics import rainbow_arm; print('Rainbow OK')"
 ```
 
-### Step 2: Compile ASCON-128 for ARM
+### Step 2: Verify C Implementation (phase_2/ascon128-c)
 
 ```bash
-cd phase_2/ascon128-c
+cd ../phase_2/ascon128-c
 
-# Build library
-make all
+# Verify NIST test vectors
+make clean
+make verify
 
-# Run unit tests (verifies test vectors)
-make test
-
-# Compile for ARM (produces ascon128.elf)
+# Build ARM binary for Rainbow
 make arm
-
-# Verify ARM binary
-file build/ascon128.elf  # Should show: "ELF 32-bit LSB executable, ARM"
+ls -la build/ascon128.elf
 ```
 
-**Test Vector Verification:** The test suite verifies against NIST SP 800-232 official test vectors.
+**Expected Output:**
+```
+Test 1: Empty PT, Empty AD
+Tag:    e355159f292911f794cb1432a0103a8a
+Expect: e355159f292911f794cb1432a0103a8a
+[PASS]
+
+Test 2: PT=16, AD=0
+Tag:    f58e28436dd71556d58dfa56ac890beb
+Expect: f58e28436dd71556d58dfa56ac890beb
+[PASS]
+```
 
 ### Step 3: Generate Traces with Rainbow
 

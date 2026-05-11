@@ -39,7 +39,7 @@ models:
 # Attack parameters
 attack:
   target_byte: 0
-  num_classes: 9  # Hamming weight 0-8
+  num_classes: 6  # ASCON 5-bit S-box: Hamming weight 0-5
   
 # Output paths
 paths:

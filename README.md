@@ -1,78 +1,30 @@
-# Side-Chain-Analysis
+# ASCON-128 Side-Channel Analysis
 
-An industry-structured repository for building an intelligent side-channel attack system.
+Verified ASCON-128 side-channel attack implementation with Rainbow emulation.
 
-## Repository Modules
-
-- `attack-emulation-core`: baseline emulation target and linker setup.
-- `intelligent-attack-pipeline`: dataset generation, model training, and attack evaluation.
-- `adaptive-cryptanalysis-core`: ASCON implementation track and implementation roadmap for upcoming work.
 
 ## Quick Start
 
-### 1) Environment setup
+### 1. Verify C Implementation
 
 ```bash
-python3 -m venv rainbow_env
-source rainbow_env/bin/activate
-pip install -U pip
-pip install -r requirements.txt
+cd phase_2/ascon128-c
+make clean
+make verify
 ```
 
-### 2) Optional Rainbow local install
+**Expected:** Both NIST tests PASS
 
-Use this when you maintain a local `rainbow/` source checkout:
+### 2. Build ARM Binary
 
 ```bash
-cd rainbow
-pip install -e .
-cd ..
+make arm
+ls -la build/ascon128.elf
 ```
 
-### 3) Verify dependencies
+### 3. Python Pipeline
 
 ```bash
-python3 -c "from rainbow.generics import rainbow_arm; print('Rainbow OK')"
-python3 -c "import lascar; print('Lascar OK')"
+cd intelligent-attack-pipeline
+python3 -c "from src.utils.metrics_fixed import compute_ascon_sbox_hw; print('OK')"
 ```
-
-## Module Usage
-
-### `attack-emulation-core`
-
-- Contains low-level C target and linker script.
-- Example compile command:
-
-```bash
-arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -O0 -g -nostdlib -T attack-emulation-core/link.ld -o simple_xor.elf attack-emulation-core/simple_xor.c
-```
-
-### `intelligent-attack-pipeline`
-
-Run from repository root:
-
-```bash
-python3 intelligent-attack-pipeline/generate_dataset.py
-python3 intelligent-attack-pipeline/attack.py
-python3 intelligent-attack-pipeline/comparative_analysis.py
-```
-
-Outputs include trained models and analysis plots.
-
-### `adaptive-cryptanalysis-core`
-
-- `implementation-roadmap.md`: implementation plan for your next ASCON-focused phase.
-- `ascon128_reference.c`: reference ASCON implementation target.
-- `ascon_validation_harness.c`: validation harness for functional checks.
-
-## Recommended Execution Order
-
-1. Build and validate emulation target in `attack-emulation-core`.
-2. Generate and train in `intelligent-attack-pipeline`.
-3. Start ASCON implementation flow in `adaptive-cryptanalysis-core` (roadmap-first).
-
-## Troubleshooting
-
-- If `rainbow.generics` import fails, reinstall Rainbow from local source checkout (`pip install -e .`).
-- If Python modules are missing, run `pip install -r requirements.txt` again.
-- If ARM compile fails, install `gcc-arm-none-eabi` and `binutils-arm-none-eabi`.

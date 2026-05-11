@@ -25,7 +25,7 @@ except ImportError:
     print("Install with: pip install rainbow-py OR clone from GitHub")
     RAINBOW_AVAILABLE = False
 
-from src.utils.metrics import hamming_weight_5bit, compute_ascon_sbox_hw, verify_hw_distribution
+from src.utils.metrics_fixed import hamming_weight_5bit, compute_ascon_sbox_hw, verify_hw_distribution
 
 
 # ASCON-128 constants
@@ -124,7 +124,6 @@ def write_dataset_documentation(
     target_byte,
     max_samples,
     max_instructions,
-    synthetic_count,
     num_traces,
     hw_counts,
     plot_dir,
@@ -140,8 +139,7 @@ def write_dataset_documentation(
         f.write(f"- Scenario: {'fixed-key' if fixed_key else 'variable-key'}\n")
         f.write(f"- Number of traces: {num_traces}\n")
         f.write(f"- Max instructions per trace: {max_instructions}\n")
-        f.write(f"- Stored samples per trace: {max_samples}\n")
-        f.write(f"- Synthetic traces used: {synthetic_count}\n\n")
+        f.write(f"- Stored samples per trace: {max_samples}\n\n")
 
         f.write("## Leakage Model\n")
         f.write("- Trace leakage source: Rainbow register Hamming Weight events.\n")
@@ -261,38 +259,35 @@ def setup_rainbow_emulator(elf_path='phase_2/ascon128-c/build/ascon128.elf'):
         return emu, enc_addr
         
     except Exception as e:
-        print(f"Warning: Could not initialize Rainbow emulator: {e}")
-        print("Falling back to synthetic trace generation")
-        return None, None
+        raise RuntimeError(f"Rainbow emulator initialization failed: {e}")
 
 
-def extract_sbox_hw_from_state(key_byte, pt_byte, nonce_byte=0):
+def extract_sbox_hw_from_state(key, nonce, target_byte=0):
     """Calculate ASCON S-box output HW for first round.
     
-    Uses the proper ASCON S-box implementation from metrics.py.
+    CRITICAL FIX: Uses proper ASCON state simulation from metrics_fixed.py.
     
     Args:
-        key_byte: Key byte value (0-255)
-        pt_byte: Plaintext byte value (0-255)
-        nonce_byte: Nonce byte value (0-255), default 0
+        key: 16-byte key array
+        nonce: 16-byte nonce array
+        target_byte: Which byte position (0-15) - determines which bit-slice
     
     Returns:
         Hamming Weight 0-5 (ASCON 5-bit S-box output)
     """
-    return compute_ascon_sbox_hw(pt_byte, key_byte, nonce_byte)
+    return compute_ascon_sbox_hw(key, nonce, column=target_byte * 8)
 
 
-def generate_ascon_trace_full(
+def generate_ascon_trace(
     emu,
     enc_addr,
     key,
     plaintext,
     nonce,
     noise_std=1.0,
-    max_samples=2000,
+    max_samples=1551,
     max_instructions=0,
     verbose_trace=False,
-    allow_synthetic_fallback=False,
 ):
     """Generate power trace using FULL Rainbow emulation.
     
@@ -379,116 +374,49 @@ def generate_ascon_trace_full(
                 print(f"Error during emulation: {e}")
             trace = None
     
-    # Calculate S-box HW for labeling (same as before)
-    sbox_hw = extract_sbox_hw_from_state(key[0], plaintext[0], nonce[0])
+    # Calculate S-box HW using REAL ASCON simulation
+    sbox_hw = compute_ascon_sbox_hw(key, nonce, target_byte=0)
     
-    # If trace is too short or empty, optionally fallback to synthetic
+    # Verify trace was captured
     if trace is None or len(trace) < 10:
-        if not allow_synthetic_fallback:
-            raise RuntimeError(
-                f"Rainbow trace capture failed (length={len(trace) if trace is not None else 0})"
-            )
-        if verbose_trace:
-            print(
-                f"  Using synthetic trace (execution trace length: {len(trace) if trace is not None else 0})"
-            )
-        trace = generate_synthetic_trace(sbox_hw, trace_length=max_samples)
-        used_synthetic = True
-    else:
-        used_synthetic = False
-        if verbose_trace:
-            print(f"  Captured {len(trace)} samples from execution")
+        raise RuntimeError(
+            f"Rainbow trace capture failed (length={len(trace) if trace is not None else 0})"
+        )
+    
+    if verbose_trace:
+        print(f"  Captured {len(trace)} samples from execution")
 
     trace = normalize_trace_length(trace, max_samples)
-    return trace.astype(np.float32), sbox_hw, used_synthetic
-
-
-def generate_ascon_trace(
-    emu,
-    enc_addr,
-    key,
-    plaintext,
-    nonce,
-    max_samples=2000,
-    max_instructions=0,
-    verbose_trace=False,
-    allow_synthetic_fallback=False,
-    noise_std=1.0,
-):
-    """Wrapper to generate trace using Rainbow or fallback.
-    
-    Args:
-        emu: Rainbow emulator instance (or None)
-        enc_addr: Function address (or None)
-        key: 16-byte key
-        plaintext: 16-byte plaintext
-        nonce: 16-byte nonce
-    
-    Returns:
-        trace: Power trace array
-        sbox_hw: S-box output Hamming Weight (0-5)
-    """
-    if emu is not None and enc_addr is not None:
-        # Use full Rainbow emulation
-        return generate_ascon_trace_full(
-            emu,
-            enc_addr,
-            key,
-            plaintext,
-            nonce,
-            noise_std=noise_std,
-            max_samples=max_samples,
-            max_instructions=max_instructions,
-            verbose_trace=verbose_trace,
-            allow_synthetic_fallback=allow_synthetic_fallback,
-        )
-    else:
-        # Emulator unavailable
-        if not allow_synthetic_fallback:
-            raise RuntimeError("Rainbow emulator not available and synthetic fallback is disabled.")
-        sbox_hw = extract_sbox_hw_from_state(key[0], plaintext[0], nonce[0])
-        trace = generate_synthetic_trace(sbox_hw, trace_length=max_samples)
-        return normalize_trace_length(trace, max_samples), sbox_hw, True
+    return trace.astype(np.float32), sbox_hw
 
 
 def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True, 
                             output_path='data/datasets/ascon_rainbow_dataset.h5',
-                            target_byte=0, max_samples=2000, max_instructions=0,
-                            verbose_trace=False, allow_synthetic_fallback=False,
-                            noise_std=0.0, force_synthetic_only=False,
+                            target_byte=0, max_samples=1551, max_instructions=0,
+                            verbose_trace=False,
+                            noise_std=0.0,
                             attack_ratio=0.3, plots_dir='', num_plot_traces=10,
                             doc_output=''):
     """Generate ASCON-128 dataset using Rainbow emulator.
     
+    CRITICAL: Synthetic fallback has been removed. If Rainbow fails, this will crash.
+    
     Args:
-        elf_path: Path to ASCON-128 ARM binary
+        elf_path: Path to ASCON-128 ARM ELF binary
         num_traces: Total number of traces to generate
-        fixed_key: Whether to use fixed key
-        output_path: Output HDF5 file path
-        target_byte: Which byte to target (0-15, default 0)
-        max_samples: Maximum samples to keep per trace (truncates long traces)
+        fixed_key: If True, use fixed key for all traces. If False, random key per trace.
+        output_path: Path to output HDF5 file
+        target_byte: Which byte position to target (0-15)
+        max_samples: Maximum samples to keep per trace (default 1551)
         max_instructions: Maximum ARM instructions to emulate per trace (0 = full)
         verbose_trace: Print per-trace capture details
-        allow_synthetic_fallback: Allow fake/synthetic trace fallback on failures
         noise_std: Add Gaussian noise to traces (0.0 for pure emulator leakage)
     """
-    if force_synthetic_only:
-        print("Synthetic-only mode enabled (Rainbow emulation disabled)")
-        emu, enc_addr = None, None
-    else:
-        print(f"Setting up Rainbow emulator with {elf_path}")
-        emu, enc_addr = setup_rainbow_emulator(elf_path)
+    print(f"Setting up Rainbow emulator with {elf_path}")
+    emu, enc_addr = setup_rainbow_emulator(elf_path)
     
-    if emu is not None and enc_addr is not None:
-        print("✓ Using FULL Rainbow emulation with real ARM execution")
-    elif emu is not None:
-        if not allow_synthetic_fallback:
-            raise RuntimeError("Rainbow initialized but function address not found.")
-        print("⚠ Rainbow initialized but no function address found - using synthetic fallback")
-    else:
-        if not allow_synthetic_fallback:
-            raise RuntimeError("Rainbow not available and synthetic fallback is disabled.")
-        print("⚠ Rainbow not available - using synthetic traces only")
+    if emu is None or enc_addr is None:
+        raise RuntimeError("Rainbow emulator setup failed - cannot proceed without emulation.")
     
     # Generate traces
     traces = np.zeros((num_traces, max_samples), dtype=np.float32)
@@ -496,7 +424,6 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
     keys = []
     nonces = []
     sbox_labels = []
-    synthetic_count = 0
     
     if fixed_key:
         fixed_key_bytes = np.random.randint(0, 256, 16, dtype=np.uint8)
@@ -520,26 +447,21 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
         # Generate nonce (random for each trace)
         nonce = np.random.randint(0, 256, 16, dtype=np.uint8)
         
-        # Compute ASCON S-box HW for target byte
-        sbox_hw = extract_sbox_hw_from_state(key[target_byte], pt[target_byte], nonce[target_byte])
+        # Compute ASCON S-box HW using REAL simulation (key + nonce, no plaintext)
+        sbox_hw = compute_ascon_sbox_hw(key, nonce, column=target_byte * 8)
         
-        # Generate trace using Rainbow or fallback
-        trace, sbox_hw_actual, used_synthetic = generate_ascon_trace(
+        # Generate trace using Rainbow
+        trace, _ = generate_ascon_trace(
             emu,
             enc_addr,
             key,
             pt,
             nonce,
+            noise_std=noise_std,
             max_samples=max_samples,
             max_instructions=max_instructions,
             verbose_trace=verbose_trace,
-            allow_synthetic_fallback=allow_synthetic_fallback,
-            noise_std=noise_std,
         )
-        synthetic_count += int(used_synthetic)
-        # Use actual HW from execution if returned
-        if sbox_hw_actual is not None:
-            sbox_hw = sbox_hw_actual
         
         traces[i] = trace
         plaintexts.append(pt)
@@ -585,8 +507,6 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
         f.attrs['num_classes'] = 6
         f.attrs['max_samples'] = max_samples
         f.attrs['max_instructions'] = max_instructions
-        f.attrs['synthetic_fallback_enabled'] = bool(allow_synthetic_fallback)
-        f.attrs['synthetic_trace_count'] = int(synthetic_count)
         f.attrs['attack_ratio'] = float(attack_ratio)
         f.attrs['disjoint_keys_enforced'] = bool((not fixed_key))
         f.attrs['disjoint_keys_ok'] = bool(disjoint_keys_ok) if disjoint_keys_ok is not None else True
@@ -610,7 +530,6 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
     print(f"\nDataset saved to {output_path}")
     print(f"  Profiling: {len(profiling_idx)} traces")
     print(f"  Attack: {len(attack_idx)} traces")
-    print(f"  Synthetic traces used: {synthetic_count}/{num_traces}")
     if disjoint_keys_ok is not None:
         print(f"  Disjoint attack keys: {disjoint_keys_ok}")
     print(f"  HW distribution: {np.bincount(sbox_labels, minlength=6)}")
@@ -629,30 +548,12 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
             target_byte,
             max_samples,
             max_instructions,
-            synthetic_count,
             num_traces,
             np.bincount(sbox_labels, minlength=6),
             plots_dir if plots_dir else "(not requested)",
             disjoint_keys_ok if disjoint_keys_ok is not None else True,
         )
         print(f"  Wrote dataset documentation to: {doc_output}")
-
-
-def generate_synthetic_trace(sbox_hw, trace_length=1551):
-    """Generate synthetic power trace based on S-box HW.
-    
-    Args:
-        sbox_hw: S-box Hamming Weight (0-5)
-        trace_length: Length of trace
-    
-    Returns:
-        Synthetic trace array
-    """
-    t = np.linspace(0, 4 * np.pi, trace_length)
-    amplitude = 0.5 + sbox_hw * 0.5
-    base_signal = amplitude * np.sin(t)
-    noise = np.random.normal(0, 0.5, trace_length)
-    return (base_signal + noise).astype(np.float32)
 
 
 if __name__ == '__main__':
@@ -669,18 +570,12 @@ if __name__ == '__main__':
                        help='Output HDF5 file')
     parser.add_argument('--noise-std', type=float, default=0.0,
                        help='Standard deviation of measurement noise (default 0.0 for pure emulator leakage)')
-    parser.add_argument('--synthetic-only', action='store_true',
-                       help='Force synthetic traces (skip Rainbow)')
-    parser.add_argument('--max-samples', type=int, default=2000,
+    parser.add_argument('--max-samples', type=int, default=1551,
                        help='Max samples to keep per trace (default 2000, full trace is ~240k)')
     parser.add_argument('--max-instructions', type=int, default=0,
                        help='Max ARM instructions per trace (0=full execution, faster when set)')
     parser.add_argument('--verbose-trace', action='store_true',
                        help='Print per-trace capture/truncation logs')
-    parser.add_argument('--allow-synthetic-fallback', action='store_true',
-                       help='Allow synthetic traces when emulation fails (disabled by default)')
-    parser.add_argument('--strict-rainbow', action='store_true',
-                       help='Require 100% real Rainbow traces (default behavior)')
     parser.add_argument('--attack-ratio', type=float, default=0.3,
                        help='Attack split ratio (default 0.3)')
     parser.add_argument('--plots-dir', default='',
