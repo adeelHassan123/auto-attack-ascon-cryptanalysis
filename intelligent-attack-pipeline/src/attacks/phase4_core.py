@@ -66,7 +66,7 @@ def compute_ascon_first_round_hw(
     if nonce_arr.shape != (16,):
         raise ValueError(f"nonce must be 16 bytes, got shape {nonce_arr.shape}")
 
-    return int(compute_ascon_sbox_hw_full(key_full, nonce_arr, column=int(target_byte_position) * 8))
+    return int(compute_ascon_sbox_hw_full(key_full, nonce_arr, column=int(target_byte_position) * 8, rounds=2))
 
 
 def generate_hw_labels(keys, nonces, plaintexts, target_byte=0):
