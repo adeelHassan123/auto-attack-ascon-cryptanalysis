@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import h5py
 import numpy as np
+from sklearn.utils.class_weight import compute_class_weight
 import json
 import random
 import tensorflow as tf
@@ -197,6 +198,11 @@ def run_experiment(
 
     print(f'  Training samples: {len(x_train)}, Validation samples: {len(x_val)}')
 
+    # Compute class weights for unbalanced classes
+    class_weights = compute_class_weight('balanced', classes=np.arange(num_classes), y=y_train_idx)
+    class_weights = dict(enumerate(class_weights))
+    print(f'  Class weights: {class_weights}')
+
     print(f'\nBuilding {model_type.upper()} model...')
     # Nonce aux makes (trace, nonce) easy to memorize; without regularization train_acc explodes while val stalls.
     reg_nonce_fixed = bool(use_nonce_aux and not variable_key)
@@ -269,7 +275,7 @@ def run_experiment(
             batch_size=batch_size,
             model_path=model_path,
             verbose=2,
-            class_weight=None,
+            class_weight=class_weights,
             monitor=monitor,
             monitor_mode=mode,
             early_stopping_patience=es_patience,
@@ -288,7 +294,7 @@ def run_experiment(
             batch_size=batch_size,
             model_path=model_path,
             verbose=2,
-            class_weight=None,
+            class_weight=class_weights,
             monitor=monitor,
             monitor_mode=mode,
             early_stopping_patience=es_patience,
@@ -430,6 +436,10 @@ if __name__ == '__main__':
         help='Permutation rounds before probed S-box (0–12). Default: HDF5 attr label_rounds or 2. Must match dataset.',
     )
     args = parser.parse_args()
+
+    # Default to MLP for ASCON mode (better for weak leakage)
+    if not args.standard_mode:
+        args.model = 'mlp'
 
     run_experiment(
         args.dataset,
