@@ -79,21 +79,23 @@ def ascon_sbox(state):
     for i in range(64):
         # Extract 5-bit column
         col = 0
-        col |= int((state[0] >> i) & 1) << 0
-        col |= int((state[1] >> i) & 1) << 1
+        # Keep bit order consistent with dataset labels:
+        # state[0] -> bit 4 (MSB) ... state[4] -> bit 0 (LSB)
+        col |= int((state[0] >> i) & 1) << 4
+        col |= int((state[1] >> i) & 1) << 3
         col |= int((state[2] >> i) & 1) << 2
-        col |= int((state[3] >> i) & 1) << 3
-        col |= int((state[4] >> i) & 1) << 4
+        col |= int((state[3] >> i) & 1) << 1
+        col |= int((state[4] >> i) & 1) << 0
         
         # Apply S-box
         new_col = int(ASCON_SBOX[col])
         
         # Write back
-        new_state[0] |= np.uint64((new_col >> 0) & 1) << i
-        new_state[1] |= np.uint64((new_col >> 1) & 1) << i
+        new_state[0] |= np.uint64((new_col >> 4) & 1) << i
+        new_state[1] |= np.uint64((new_col >> 3) & 1) << i
         new_state[2] |= np.uint64((new_col >> 2) & 1) << i
-        new_state[3] |= np.uint64((new_col >> 3) & 1) << i
-        new_state[4] |= np.uint64((new_col >> 4) & 1) << i
+        new_state[3] |= np.uint64((new_col >> 1) & 1) << i
+        new_state[4] |= np.uint64((new_col >> 0) & 1) << i
     
     state[:] = new_state
 
@@ -143,11 +145,11 @@ def compute_ascon_sbox_hw_full(key, nonce, column=0):
     
     # Extract 5-bit column BEFORE S-box (this is the input)
     col_input = 0
-    col_input |= int((state[0] >> column) & 1) << 0
-    col_input |= int((state[1] >> column) & 1) << 1
+    col_input |= int((state[0] >> column) & 1) << 4
+    col_input |= int((state[1] >> column) & 1) << 3
     col_input |= int((state[2] >> column) & 1) << 2
-    col_input |= int((state[3] >> column) & 1) << 3
-    col_input |= int((state[4] >> column) & 1) << 4
+    col_input |= int((state[3] >> column) & 1) << 1
+    col_input |= int((state[4] >> column) & 1) << 0
     
     # Apply S-box and return HW
     sbox_out = int(ASCON_SBOX[col_input])
@@ -216,12 +218,6 @@ def key_recovery_from_predictions(predictions, pt, true_key_byte, key_full, nonc
     
     # Target column corresponds to target_byte (8 bits per byte)
     target_column = target_byte * 8
-    
-    # Average nonce for fixed-key scenario (single nonce typically)
-    if len(nonce.shape) == 1:
-        avg_nonce = nonce
-    else:
-        avg_nonce = nonce[0]  # Use first nonce (all should be same in fixed-key)
     
     for k_guess in range(256):
         # Construct full key hypothesis by varying only target byte
@@ -319,7 +315,7 @@ def rank_statistics(ranks):
     }
 
 
-def key_recovery_by_byte(predictions, pt, key_bytes, target_byte=0, 
+def key_recovery_by_byte(predictions, pt, key_bytes, nonce, target_byte=0, 
                         leakage_model='ascon', num_classes=6):
     """Comprehensive key recovery with ASCON leakage model.
     
@@ -341,14 +337,15 @@ def key_recovery_by_byte(predictions, pt, key_bytes, target_byte=0,
     if is_fixed_key:
         # Fixed-key scenario
         true_key = key_bytes[0, target_byte] if len(key_bytes.shape) > 1 else key_bytes[target_byte]
+        key_full = key_bytes[0] if len(key_bytes.shape) > 1 else key_bytes
         rank, scores = key_recovery_from_predictions(
-            predictions, pt, true_key, num_classes=num_classes
+            predictions, pt, true_key, key_full, nonce, target_byte=target_byte, num_classes=num_classes
         )
         return np.array([rank]), scores
     else:
         # Variable-key scenario
         ranks = per_trace_variable_key_success(
-            predictions, pt, key_bytes, num_classes=num_classes
+            predictions, pt, key_bytes, nonce, target_byte=target_byte, num_classes=num_classes
         )
         # Compute average scores for reporting
         scores = None  # Not meaningful for variable-key

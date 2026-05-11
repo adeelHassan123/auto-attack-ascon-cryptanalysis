@@ -207,11 +207,60 @@ def compute_ascon_sbox_hw_batch(keys, nonces, column=0):
     return hws
 
 
+def expected_ascon_init_hw_distribution(column=0, fixed_key=False, key=None):
+    """Expected HW distribution for first-round ASCON S-box labels.
+
+    This models exactly what `compute_ascon_sbox_hw()` labels:
+    - x0 bit is fixed by IV
+    - x1/x2 bits come from key (and RC on x2)
+    - x3/x4 bits come from nonce
+
+    Args:
+        column: Bit-slice index (0-63)
+        fixed_key: True for fixed-key random-nonce setting
+        key: Required when fixed_key=True (16-byte key)
+
+    Returns:
+        np.ndarray: Expected class probabilities in percent (shape (6,))
+    """
+    if not 0 <= int(column) < 64:
+        raise ValueError("column must be in range [0, 63]")
+
+    zero = np.zeros(16, dtype=np.uint8)
+    base_state = ascon_init_state(zero, zero)
+    iv_bit = int((base_state[0] >> int(column)) & 1)
+
+    if fixed_key:
+        if key is None:
+            raise ValueError("key is required when fixed_key=True")
+        fixed_state = ascon_init_state(np.array(key, dtype=np.uint8), zero)
+        fixed_state[2] ^= RC[0]
+        k1_bits = [int((fixed_state[1] >> int(column)) & 1)]
+        k2_bits = [int((fixed_state[2] >> int(column)) & 1)]
+    else:
+        # Key bits are random in variable-key mode.
+        k1_bits = [0, 1]
+        k2_bits = [0, 1]
+
+    counts = np.zeros(6, dtype=np.float64)
+    total = 0
+    for b1 in k1_bits:
+        for b2 in k2_bits:
+            for b3 in (0, 1):
+                for b4 in (0, 1):
+                    col_input = (iv_bit << 4) | (b1 << 3) | (b2 << 2) | (b3 << 1) | b4
+                    hw = int(ASCON_SBOX_HW[col_input])
+                    counts[hw] += 1
+                    total += 1
+
+    return counts * (100.0 / total)
+
+
 # =============================================================================
 # Utility Functions
 # =============================================================================
 
-def verify_hw_distribution(labels, tolerance=2.0):
+def verify_hw_distribution(labels, tolerance=2.0, expected=None):
     """Verify that HW distribution matches expected binomial.
     
     Args:
@@ -221,8 +270,11 @@ def verify_hw_distribution(labels, tolerance=2.0):
     Returns:
         bool: True if distribution is valid
     """
-    # Expected binomial distribution for 5-bit uniform random
-    expected = np.array([3.125, 15.625, 31.25, 31.25, 15.625, 3.125])
+    # Backward-compatible default: 5-bit binomial model.
+    if expected is None:
+        expected = np.array([3.125, 15.625, 31.25, 31.25, 15.625, 3.125], dtype=np.float64)
+    else:
+        expected = np.array(expected, dtype=np.float64)
     
     # Actual distribution
     counts = np.bincount(labels, minlength=6)

@@ -19,13 +19,17 @@ import matplotlib.pyplot as plt
 try:
     from rainbow.generics import rainbow_arm
     from rainbow import TraceConfig, HammingWeight
-    RAINBOW_AVAILABLE = True
 except ImportError:
-    print("Warning: Rainbow framework not installed. Using fallback.")
-    print("Install with: pip install rainbow-py OR clone from GitHub")
-    RAINBOW_AVAILABLE = False
+    print("ERROR: Rainbow framework not installed.")
+    print("Install with: pip install rainbow-py")
+    print("Or: git clone https://github.com/Ledger-Donjon/rainbow.git && cd rainbow && pip install -e .")
+    sys.exit(1)
 
-from src.utils.metrics_fixed import hamming_weight_5bit, compute_ascon_sbox_hw, verify_hw_distribution
+from src.utils.metrics_fixed import (
+    compute_ascon_sbox_hw,
+    expected_ascon_init_hw_distribution,
+    verify_hw_distribution,
+)
 
 
 # ASCON-128 constants
@@ -225,12 +229,8 @@ def setup_rainbow_emulator(elf_path='phase_2/ascon128-c/build/ascon128.elf'):
         elf_path: Path to ARM-compiled ASCON-128 binary
     
     Returns:
-        Tuple of (emulator instance, encrypt function address) or (None, None)
+        Tuple of (emulator instance, encrypt function address)
     """
-    if not RAINBOW_AVAILABLE:
-        print("Rainbow not available - using fallback")
-        return None, None
-        
     try:
         # Configure trace to capture register Hamming Weight
         trace_config = TraceConfig(register=HammingWeight())
@@ -375,7 +375,7 @@ def generate_ascon_trace(
             trace = None
     
     # Calculate S-box HW using REAL ASCON simulation
-    sbox_hw = compute_ascon_sbox_hw(key, nonce, target_byte=0)
+    sbox_hw = compute_ascon_sbox_hw(key, nonce, column=0)
     
     # Verify trace was captured
     if trace is None or len(trace) < 10:
@@ -475,9 +475,14 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
     nonces_array = np.array(nonces, dtype=np.uint8)
     sbox_labels = np.array(sbox_labels, dtype=np.uint8)
     
-    # Verify HW distribution
+    # Verify HW distribution against the correct ASCON-init model
     print("\nVerifying HW distribution...")
-    dist_valid = verify_hw_distribution(sbox_labels, tolerance=3.0)
+    expected_dist = expected_ascon_init_hw_distribution(
+        column=target_byte * 8,
+        fixed_key=fixed_key,
+        key=fixed_key_bytes if fixed_key else None,
+    )
+    dist_valid = verify_hw_distribution(sbox_labels, tolerance=3.0, expected=expected_dist)
     if not dist_valid:
         print("WARNING: HW distribution may be biased!")
     
@@ -533,7 +538,8 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
     if disjoint_keys_ok is not None:
         print(f"  Disjoint attack keys: {disjoint_keys_ok}")
     print(f"  HW distribution: {np.bincount(sbox_labels, minlength=6)}")
-    print(f"  Expected (binomial): [~{num_traces*0.031:.0f}, ~{num_traces*0.156:.0f}, ~{num_traces*0.312:.0f}, ~{num_traces*0.312:.0f}, ~{num_traces*0.156:.0f}, ~{num_traces*0.031:.0f}]")
+    exp_counts = np.rint(expected_dist * (num_traces / 100.0)).astype(np.int64)
+    print(f"  Expected (ASCON init model): {exp_counts.tolist()}")
 
     # Validation + visual deliverables
     if plots_dir:
@@ -572,8 +578,8 @@ if __name__ == '__main__':
                        help='Standard deviation of measurement noise (default 0.0 for pure emulator leakage)')
     parser.add_argument('--max-samples', type=int, default=1551,
                        help='Max samples to keep per trace (default 2000, full trace is ~240k)')
-    parser.add_argument('--max-instructions', type=int, default=0,
-                       help='Max ARM instructions per trace (0=full execution, faster when set)')
+    parser.add_argument('--max-instructions', type=int, default=500,
+                       help='Max ARM instructions per trace (0=full, 500=init phase with key leakage)')
     parser.add_argument('--verbose-trace', action='store_true',
                        help='Print per-trace capture/truncation logs')
     parser.add_argument('--attack-ratio', type=float, default=0.3,
@@ -595,10 +601,6 @@ if __name__ == '__main__':
     else:
         output = args.output
     
-    allow_synthetic_fallback = args.allow_synthetic_fallback or args.synthetic_only
-    if args.strict_rainbow:
-        allow_synthetic_fallback = False
-
     create_dataset_rainbow(
         args.elf,
         args.traces,
@@ -608,9 +610,7 @@ if __name__ == '__main__':
         args.max_samples,
         args.max_instructions,
         args.verbose_trace,
-        allow_synthetic_fallback,
         args.noise_std,
-        args.synthetic_only,
         args.attack_ratio,
         args.plots_dir,
         args.num_plot_traces,

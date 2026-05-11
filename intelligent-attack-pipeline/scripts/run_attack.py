@@ -20,7 +20,7 @@ from src.attacks.key_recovery import (
 
 def run_experiment(datafile, model_type='mlp', variable_key=False, 
                    model_path='results/model.h5', ascon_mode=True,
-                   epochs=100, batch_size=None):
+                   epochs=100, batch_size=None, return_attack_artifacts=False):
     """Run side-channel attack experiment with proper training.
     
     Args:
@@ -31,6 +31,8 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
         ascon_mode: If True, use ASCON 5-bit S-box (6 classes HW 0-5)
         epochs: Maximum training epochs
         batch_size: Batch size (None = auto-select)
+        return_attack_artifacts: If True, return per-attack raw artifacts
+            (key scores for fixed-key, per-trace ranks for variable-key)
     """
     # Set seeds for reproducibility
     np.random.seed(42)
@@ -60,9 +62,9 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
     
     # Generate labels only if not stored in dataset
     if y is None:
-        y = generate_labels(
-            pt, key, nonce=nonce, target_byte=target_byte, use_ascon_sbox=ascon_mode
-        )
+        if not ascon_mode:
+            raise ValueError("Standard mode label generation is not implemented for this ASCON pipeline.")
+        y = generate_labels(key, nonce, target_byte=target_byte)
     y_cat = to_categorical(y, num_classes=num_classes)
     
     print(f"  Label distribution: {np.bincount(y, minlength=num_classes)}")
@@ -116,10 +118,11 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
     preds_attack = model.predict(x_attack, verbose=0)
     
     # Key recovery
+    attack_artifacts = {}
     if not variable_key:
         fixed_key_byte = key_attack[0, target_byte]
         rank, scores = key_recovery_from_predictions(
-            preds_attack, pt_attack, fixed_key_byte, nonce=nonce_attack,
+            preds_attack, pt_attack, fixed_key_byte, key_attack[0], nonce_attack,
             target_byte=target_byte, num_classes=num_classes
         )
         print(f"Fixed-key attack: true byte=0x{fixed_key_byte:02x}, rank={rank}")
@@ -137,6 +140,11 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
             'epochs_trained': len(history.history['loss']),
             'final_val_acc': float(history.history['val_accuracy'][-1]),
             'final_val_loss': float(history.history['val_loss'][-1])
+        }
+        attack_artifacts = {
+            'rank': int(rank),
+            'true_key': int(fixed_key_byte),
+            'key_scores': scores.astype(np.float64),
         }
     else:
         ranks = per_trace_variable_key_success(
@@ -160,6 +168,7 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
             'final_val_loss': float(history.history['val_loss'][-1]),
             **{k: float(v) if isinstance(v, (np.floating, np.integer)) else v for k, v in stats.items()}
         }
+        attack_artifacts = {'ranks': ranks.astype(np.int32)}
     
     # Save results
     results_path = model_path.replace('.h5', '_results.json')
@@ -167,6 +176,8 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
         json.dump(results, f, indent=2)
     print(f"Results saved to {results_path}")
     
+    if return_attack_artifacts:
+        return history, results, attack_artifacts
     return history, results
 
 
