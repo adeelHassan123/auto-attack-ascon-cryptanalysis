@@ -6,6 +6,19 @@ construction state tracking.
 """
 import numpy as np
 
+# Try to import Numba for JIT acceleration
+try:
+    from numba import njit, prange
+    NUMBA_AVAILABLE = True
+except ImportError:
+    NUMBA_AVAILABLE = False
+    # Create dummy decorators if numba not available
+    def njit(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+    prange = range
+
 # ASCON-128 S-box (5-bit to 5-bit) - NIST SP 800-232
 ASCON_SBOX = np.array([
     0x04, 0x0b, 0x1f, 0x14, 0x1a, 0x15, 0x09, 0x02,
@@ -161,6 +174,116 @@ def compute_ascon_sbox_hw_full(key, nonce, column=0, rounds=2):
     return int(HW5_TABLE[sbox_out])
 
 
+# =============================================================================
+# Numba-accelerated fast batch computation (for attack evaluation)
+# =============================================================================
+
+if NUMBA_AVAILABLE:
+    @njit(cache=True)
+    def _compute_hw_fast(key0, key1, key2, key3, key4, key5, key6, key7,
+                         key8, key9, key10, key11, key12, key13, key14, key15,
+                         nonce0, nonce1, nonce2, nonce3, nonce4, nonce5, nonce6, nonce7,
+                         nonce8, nonce9, nonce10, nonce11, nonce12, nonce13, nonce14, nonce15,
+                         column, rounds):
+        """Compute S-box HW for a single trace using unpacked arrays (Numba-friendly)."""
+        # ASCON IV
+        IV = np.uint64(0x80400c0600000000)
+        
+        # Round constants
+        rc = np.array([0xf0, 0xe1, 0xd2, 0xc3, 0xb4, 0xa5, 0x96, 0x87,
+                       0x78, 0x69, 0x5a, 0x4b], dtype=np.uint64)
+        
+        # S-box table
+        sbox = np.array([
+            0x04, 0x0b, 0x1f, 0x14, 0x1a, 0x15, 0x09, 0x02,
+            0x1b, 0x05, 0x08, 0x12, 0x1d, 0x03, 0x06, 0x1c,
+            0x1e, 0x13, 0x07, 0x0e, 0x00, 0x0d, 0x11, 0x18,
+            0x10, 0x0c, 0x01, 0x19, 0x16, 0x0a, 0x0f, 0x17
+        ], dtype=np.uint8)
+        
+        # HW table
+        hw5 = np.array([0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4,
+                        1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5], dtype=np.uint8)
+        
+        # Build key and nonce words
+        k0 = (np.uint64(key0) | (np.uint64(key1) << 8) | 
+              (np.uint64(key2) << 16) | (np.uint64(key3) << 24) |
+              (np.uint64(key4) << 32) | (np.uint64(key5) << 40) |
+              (np.uint64(key6) << 48) | (np.uint64(key7) << 56))
+        k1 = (np.uint64(key8) | (np.uint64(key9) << 8) | 
+              (np.uint64(key10) << 16) | (np.uint64(key11) << 24) |
+              (np.uint64(key12) << 32) | (np.uint64(key13) << 40) |
+              (np.uint64(key14) << 48) | (np.uint64(key15) << 56))
+        
+        n0 = (np.uint64(nonce0) | (np.uint64(nonce1) << 8) | 
+              (np.uint64(nonce2) << 16) | (np.uint64(nonce3) << 24) |
+              (np.uint64(nonce4) << 32) | (np.uint64(nonce5) << 40) |
+              (np.uint64(nonce6) << 48) | (np.uint64(nonce7) << 56))
+        n1 = (np.uint64(nonce8) | (np.uint64(nonce9) << 8) | 
+              (np.uint64(nonce10) << 16) | (np.uint64(nonce11) << 24) |
+              (np.uint64(nonce12) << 32) | (np.uint64(nonce13) << 40) |
+              (np.uint64(nonce14) << 48) | (np.uint64(nonce15) << 56))
+        
+        # Initialize state
+        state0 = IV ^ k0
+        state1 = k1
+        state2 = IV ^ n0 ^ k0
+        state3 = n1 ^ k1
+        state4 = IV ^ n0
+        
+        # Run rounds
+        for rnd in range(rounds):
+            # Add round constant
+            state2 ^= rc[rnd]
+            
+            # S-box (bit-sliced)
+            new0 = np.uint64(0)
+            new1 = np.uint64(0)
+            new2 = np.uint64(0)
+            new3 = np.uint64(0)
+            new4 = np.uint64(0)
+            
+            for i in range(64):
+                col = np.uint8(0)
+                col |= np.uint8((state0 >> i) & 1) << 4
+                col |= np.uint8((state1 >> i) & 1) << 3
+                col |= np.uint8((state2 >> i) & 1) << 2
+                col |= np.uint8((state3 >> i) & 1) << 1
+                col |= np.uint8((state4 >> i) & 1) << 0
+                
+                new_col = sbox[col]
+                new0 |= np.uint64((new_col >> 4) & 1) << i
+                new1 |= np.uint64((new_col >> 3) & 1) << i
+                new2 |= np.uint64((new_col >> 2) & 1) << i
+                new3 |= np.uint64((new_col >> 1) & 1) << i
+                new4 |= np.uint64((new_col >> 0) & 1) << i
+            
+            state0, state1, state2, state3, state4 = new0, new1, new2, new3, new4
+            
+            # Linear layer
+            t0, t1, t2, t3, t4 = state0, state1, state2, state3, state4
+            state0 = t0 ^ ((t0 >> 19) | (t0 << 45)) ^ ((t0 >> 28) | (t0 << 36))
+            state1 = t1 ^ ((t1 >> 61) | (t1 << 3)) ^ ((t1 >> 39) | (t1 << 25))
+            state2 = t2 ^ ((t2 >> 1) | (t2 << 63)) ^ ((t2 >> 6) | (t2 << 58))
+            state3 = t3 ^ ((t3 >> 10) | (t3 << 54)) ^ ((t3 >> 17) | (t3 << 47))
+            state4 = t4 ^ ((t4 >> 7) | (t4 << 57)) ^ ((t4 >> 41) | (t4 << 23))
+        
+        # Extract column and compute HW
+        col_input = np.uint8(0)
+        col_input |= np.uint8((state0 >> column) & 1) << 4
+        col_input |= np.uint8((state1 >> column) & 1) << 3
+        col_input |= np.uint8((state2 >> column) & 1) << 2
+        col_input |= np.uint8((state3 >> column) & 1) << 1
+        col_input |= np.uint8((state4 >> column) & 1) << 0
+        
+        sbox_out = sbox[col_input]
+        return hw5[sbox_out]
+    
+    print("[key_recovery] Numba JIT compilation enabled for fast attack evaluation")
+else:
+    print("[key_recovery] Numba not available, using slower Python implementation")
+
+
 def generate_labels(key, nonce, num_traces=None, target_byte=0):
     """Generate Hamming Weight labels for training using REAL ASCON simulation.
     
@@ -198,6 +321,23 @@ def generate_labels(key, nonce, num_traces=None, target_byte=0):
         labels[i] = compute_ascon_sbox_hw_full(key[i], nonce[i], target_column, rounds=2)
     
     return labels
+
+
+def compute_ascon_sbox_hw_fast(key, nonce, column=0, rounds=2):
+    """Fast HW computation using Numba JIT (for attack evaluation).
+    
+    Falls back to Python implementation if Numba not available.
+    """
+    if NUMBA_AVAILABLE:
+        return _compute_hw_fast(
+            key[0], key[1], key[2], key[3], key[4], key[5], key[6], key[7],
+            key[8], key[9], key[10], key[11], key[12], key[13], key[14], key[15],
+            nonce[0], nonce[1], nonce[2], nonce[3], nonce[4], nonce[5], nonce[6], nonce[7],
+            nonce[8], nonce[9], nonce[10], nonce[11], nonce[12], nonce[13], nonce[14], nonce[15],
+            column, rounds
+        )
+    else:
+        return compute_ascon_sbox_hw_full(key, nonce, column, rounds)
 
 
 def key_recovery_from_predictions(predictions, pt, true_key_byte, key_full, nonce, target_byte=0, num_classes=6):
