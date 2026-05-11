@@ -127,6 +127,13 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
     
     # Evaluate attack
     print("\nEvaluating attack...")
+    # Use up to 20000 attack traces for better results
+    max_attack_traces = min(len(x_attack), 20000)
+    x_attack = x_attack[:max_attack_traces]
+    pt_attack = pt_attack[:max_attack_traces]
+    nonce_attack = nonce_attack[:max_attack_traces]
+    key_attack = key_attack[:max_attack_traces]
+    print(f"  Using {max_attack_traces} attack traces")
     preds_attack = model.predict(x_attack, verbose=0)
     
     # Key recovery
