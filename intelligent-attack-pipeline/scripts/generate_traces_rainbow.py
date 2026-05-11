@@ -275,7 +275,7 @@ def extract_sbox_hw_from_state(key, nonce, target_byte=0):
     Returns:
         Hamming Weight 0-5 (ASCON 5-bit S-box output)
     """
-    return compute_ascon_sbox_hw(key, nonce, column=target_byte * 8, rounds=2)
+    return compute_ascon_sbox_hw(key, nonce, column=target_byte * 8, rounds=0)
 
 
 def generate_ascon_trace(
@@ -375,7 +375,7 @@ def generate_ascon_trace(
             trace = None
     
     # Calculate S-box HW using REAL ASCON simulation
-    sbox_hw = compute_ascon_sbox_hw(key, nonce, column=0, rounds=2)
+    sbox_hw = compute_ascon_sbox_hw(key, nonce, column=0, rounds=0)
     
     # Verify trace was captured
     if trace is None or len(trace) < 10:
@@ -532,8 +532,6 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
     if disjoint_keys_ok is not None:
         print(f"  Disjoint attack keys: {disjoint_keys_ok}")
     print(f"  HW distribution: {np.bincount(sbox_labels, minlength=6)}")
-    exp_counts = np.rint(expected_dist * (num_traces / 100.0)).astype(np.int64)
-    print(f"  Expected (ASCON init model): {exp_counts.tolist()}")
 
     # Validation + visual deliverables
     if plots_dir:

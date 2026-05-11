@@ -150,7 +150,7 @@ def ascon_p12(state):
 # Correct S-box HW Computation (REPLACES BROKEN FORMULA)
 # =============================================================================
 
-def compute_ascon_sbox_hw(key, nonce, column=0, rounds=2):
+def compute_ascon_sbox_hw(key, nonce, column=0, rounds=0):
     """Compute ASCON S-box output HW using REAL state simulation.
     
     CRITICAL FIX: This replaces the broken (pt ^ key ^ nonce) & 0x1F formula
@@ -193,7 +193,7 @@ def compute_ascon_sbox_hw(key, nonce, column=0, rounds=2):
     return int(ASCON_SBOX_HW[col_input])
 
 
-def compute_ascon_sbox_hw_batch(keys, nonces, column=0, rounds=2):
+def compute_ascon_sbox_hw_batch(keys, nonces, column=0, rounds=0):
     """Batch compute ASCON S-box HW for arrays.
     
     Args:
