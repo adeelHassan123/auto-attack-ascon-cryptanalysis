@@ -87,6 +87,18 @@ def main():
         default="tempered",
         help="Class weighting policy for training"
     )
+    parser.add_argument(
+        "--trace-norm-mode",
+        choices=["auto", "off", "zscore"],
+        default="zscore",
+        help="Trace normalization policy"
+    )
+    parser.add_argument(
+        "--attack-trace-mode",
+        choices=["auto", "all", "topconf"],
+        default="all",
+        help="Attack trace selection policy"
+    )
     parser.add_argument("--output-dir", default="results/phase4", help="Output directory")
     args = parser.parse_args()
 
@@ -105,6 +117,8 @@ def main():
         epochs=args.epochs,
         batch_size=args.batch_size,
         class_weight_mode=args.class_weight_mode,
+        trace_norm_mode=args.trace_norm_mode,
+        attack_trace_mode=args.attack_trace_mode,
         results_path=results_path,
         return_attack_artifacts=True,
     )

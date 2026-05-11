@@ -62,7 +62,9 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
                    model_path='results/model.keras', ascon_mode=True,
                    epochs=100, batch_size=None, return_attack_artifacts=False,
                    results_path=None,
-                   class_weight_mode='auto'):
+                   class_weight_mode='auto',
+                   trace_norm_mode='auto',
+                   attack_trace_mode='auto'):
     """Run side-channel attack experiment with proper training.
     
     Args:
@@ -76,6 +78,8 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
         return_attack_artifacts: If True, return per-attack raw artifacts
             (key scores for fixed-key, per-trace ranks for variable-key)
         class_weight_mode: 'auto' | 'off' | 'balanced' | 'tempered'
+        trace_norm_mode: 'auto' | 'off' | 'zscore'
+        attack_trace_mode: 'auto' | 'all' | 'topconf'
     """
     # Set seeds for reproducibility
     set_global_seeds(42)
@@ -129,13 +133,23 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
         x, y_cat, y, test_size=0.2, stratify=y, random_state=42
     )
 
-    # Standardize traces using train-set statistics only.
-    trace_mean = np.mean(x_train, axis=0, dtype=np.float64)
-    trace_std = np.std(x_train, axis=0, dtype=np.float64)
-    trace_std[trace_std < 1e-8] = 1.0
-    x_train = ((x_train - trace_mean) / trace_std).astype(np.float32)
-    x_val = ((x_val - trace_mean) / trace_std).astype(np.float32)
-    x_attack = ((x_attack - trace_mean) / trace_std).astype(np.float32)
+    if trace_norm_mode not in {'auto', 'off', 'zscore'}:
+        raise ValueError("trace_norm_mode must be one of: auto, off, zscore")
+    use_zscore = (trace_norm_mode == 'zscore') or (trace_norm_mode == 'auto' and variable_key)
+    if use_zscore:
+        # Standardize traces using train-set statistics only.
+        trace_mean = np.mean(x_train, axis=0, dtype=np.float64)
+        trace_std = np.std(x_train, axis=0, dtype=np.float64)
+        trace_std[trace_std < 1e-8] = 1.0
+        x_train = ((x_train - trace_mean) / trace_std).astype(np.float32)
+        x_val = ((x_val - trace_mean) / trace_std).astype(np.float32)
+        x_attack = ((x_attack - trace_mean) / trace_std).astype(np.float32)
+        print("  Trace normalization: zscore")
+    else:
+        x_train = np.asarray(x_train, dtype=np.float32)
+        x_val = np.asarray(x_val, dtype=np.float32)
+        x_attack = np.asarray(x_attack, dtype=np.float32)
+        print("  Trace normalization: off")
 
     # Class weighting policy.
     class_weight = None
@@ -209,18 +223,47 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
     print(f"  Using {max_attack_traces} attack traces")
     preds_attack = model.predict(x_attack, verbose=0)
     
+    # Attack-trace selection policy (for key recovery robustness).
+    if attack_trace_mode not in {'auto', 'all', 'topconf'}:
+        raise ValueError("attack_trace_mode must be one of: auto, all, topconf")
+    use_topconf = (attack_trace_mode == 'topconf') or (attack_trace_mode == 'auto' and not variable_key)
+    if use_topconf:
+        conf = np.max(preds_attack, axis=1)
+        keep = max(500, int(0.5 * len(conf)))
+        keep = min(keep, len(conf))
+        sel = np.argsort(-conf)[:keep]
+        x_attack_sel = x_attack[sel]
+        pt_attack_sel = pt_attack[sel]
+        nonce_attack_sel = nonce_attack[sel]
+        key_attack_sel = key_attack[sel]
+        preds_attack_sel = preds_attack[sel]
+        print(f"  Attack trace selection: top confidence ({keep}/{len(conf)})")
+    else:
+        x_attack_sel = x_attack
+        pt_attack_sel = pt_attack
+        nonce_attack_sel = nonce_attack
+        key_attack_sel = key_attack
+        preds_attack_sel = preds_attack
+        print("  Attack trace selection: all")
+
     # Key recovery
     attack_artifacts = {}
     if not variable_key:
-        fixed_key_byte = key_attack[0, target_byte]
-        fixed_template = key_attack[0].copy()
+        fixed_key_byte = key_attack_sel[0, target_byte]
+        unique_attack_keys = np.unique(key_attack_sel, axis=0)
+        print(f"  Fixed-key check: unique attack keys = {len(unique_attack_keys)}")
+        if len(unique_attack_keys) == 1:
+            key_templates = key_attack_sel[0].copy()
+        else:
+            print("  WARNING: Attack set contains multiple keys; using per-trace key templates.")
+            key_templates = key_attack_sel
         rank, scores = recover_key_byte(
-            preds_attack,
-            pt_attack,
-            nonce_attack,
+            preds_attack_sel,
+            pt_attack_sel,
+            nonce_attack_sel,
             true_key_byte=fixed_key_byte,
             target_byte=target_byte,
-            key_templates=fixed_template,
+            key_templates=key_templates,
         )
         print(f"Fixed-key attack: true byte=0x{fixed_key_byte:02x}, rank={rank}")
         success_rate = 1.0 if rank == 0 else 0.0
@@ -246,7 +289,7 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
             'key_scores': scores.astype(np.float64),
         }
     else:
-        ranks = recover_variable_key_ranks(preds_attack, pt_attack, nonce_attack, key_attack, target_byte=target_byte)
+        ranks = recover_variable_key_ranks(preds_attack_sel, pt_attack_sel, nonce_attack_sel, key_attack_sel, target_byte=target_byte)
         stats = summarize_variable_ranks(ranks)
         
         print(f"Variable-key attack statistics:")
@@ -296,8 +339,21 @@ if __name__ == '__main__':
         default='auto',
         help='Class weighting mode'
     )
+    parser.add_argument(
+        '--trace-norm-mode',
+        choices=['auto', 'off', 'zscore'],
+        default='auto',
+        help='Trace normalization mode'
+    )
+    parser.add_argument(
+        '--attack-trace-mode',
+        choices=['auto', 'all', 'topconf'],
+        default='auto',
+        help='Attack trace selection mode'
+    )
     args = parser.parse_args()
     
     run_experiment(args.dataset, args.model, args.variable_key, args.output, 
                   ascon_mode=not args.standard_mode, epochs=args.epochs, batch_size=args.batch_size,
-                  class_weight_mode=args.class_weight_mode)
+                  class_weight_mode=args.class_weight_mode, trace_norm_mode=args.trace_norm_mode,
+                  attack_trace_mode=args.attack_trace_mode)
