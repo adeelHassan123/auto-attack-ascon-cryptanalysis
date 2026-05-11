@@ -269,11 +269,11 @@ if NUMBA_AVAILABLE:
         
         # Extract column and compute HW
         col_input = np.uint8(0)
-        col_input |= np.uint8((state0 >> column) & 1) << 0
-        col_input |= np.uint8((state1 >> column) & 1) << 1
+        col_input |= np.uint8((state0 >> column) & 1) << 4
+        col_input |= np.uint8((state1 >> column) & 1) << 3
         col_input |= np.uint8((state2 >> column) & 1) << 2
-        col_input |= np.uint8((state3 >> column) & 1) << 3
-        col_input |= np.uint8((state4 >> column) & 1) << 4
+        col_input |= np.uint8((state3 >> column) & 1) << 1
+        col_input |= np.uint8((state4 >> column) & 1) << 0
       
         
         sbox_out = sbox[col_input]
