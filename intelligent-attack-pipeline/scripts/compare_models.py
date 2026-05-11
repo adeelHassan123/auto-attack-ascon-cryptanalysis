@@ -28,7 +28,7 @@ def compare_models(dataset='data/datasets/fixed_key_dataset.h5', variable_key=Fa
             dataset, 
             model_type=model_type,
             variable_key=variable_key,
-            model_path=f'results/{model_type}_model.h5'
+            model_path=f'results/{model_type}_model.keras'
         )
         
         results.append({

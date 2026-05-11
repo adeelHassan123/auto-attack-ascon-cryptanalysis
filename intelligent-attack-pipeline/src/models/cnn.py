@@ -1,11 +1,12 @@
 """CNN (Convolutional Neural Network) for side-channel attacks - STATE OF THE ART."""
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import (
-    Conv1D, MaxPooling1D, Flatten, Dense, Dropout,
+    Conv1D, MaxPooling1D, Dense, Dropout,
     BatchNormalization, Input, Add, Activation, GlobalAveragePooling1D
 )
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.losses import CategoricalCrossentropy
 import tensorflow as tf
 import numpy as np
 import random
@@ -110,48 +111,36 @@ def build_cnn(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
         x = Activation('swish')(x)
         x = Dropout(dropout_rate)(x)
     else:
-        # DEEPER architecture for fixed-key
-        # Initial conv
-        x = Conv1D(64, kernel_size=11, padding='same', kernel_initializer='he_normal')(inputs)
+        # Compact architecture for fixed-key to reduce overfitting/memory pressure.
+        x = Conv1D(32, kernel_size=9, padding='same', kernel_initializer='he_normal')(inputs)
         x = BatchNormalization()(x)
         x = Activation('swish')(x)
         x = MaxPooling1D(pool_size=2)(x)
         
-        # Residual blocks
-        x = conv_residual_block(x, 64, kernel_size=7, dropout_rate=dropout_rate)
-        x = conv_residual_block(x, 64, kernel_size=7, dropout_rate=dropout_rate)
+        x = conv_residual_block(x, 32, kernel_size=7, dropout_rate=dropout_rate)
         x = MaxPooling1D(pool_size=2)(x)
         
-        x = conv_residual_block(x, 128, kernel_size=5, dropout_rate=dropout_rate)
-        x = conv_residual_block(x, 128, kernel_size=5, dropout_rate=dropout_rate)
-        x = conv_residual_block(x, 128, kernel_size=5, dropout_rate=dropout_rate)
+        x = conv_residual_block(x, 64, kernel_size=5, dropout_rate=dropout_rate)
         x = MaxPooling1D(pool_size=2)(x)
         
-        x = conv_residual_block(x, 256, kernel_size=3, dropout_rate=dropout_rate)
-        x = conv_residual_block(x, 256, kernel_size=3, dropout_rate=dropout_rate)
-        x = conv_residual_block(x, 256, kernel_size=3, dropout_rate=dropout_rate)
+        x = conv_residual_block(x, 128, kernel_size=3, dropout_rate=dropout_rate)
         x = MaxPooling1D(pool_size=2)(x)
         
-        x = conv_residual_block(x, 512, kernel_size=3, dropout_rate=dropout_rate)
-        x = conv_residual_block(x, 512, kernel_size=3, dropout_rate=dropout_rate)
-        
-        # Flatten
-        x = Flatten()(x)
+        x = Conv1D(128, kernel_size=3, padding='same', kernel_initializer='he_normal')(x)
+        x = BatchNormalization()(x)
+        x = Activation('swish')(x)
+        x = GlobalAveragePooling1D()(x)
         
         # Dense layers
-        x = Dense(512, kernel_initializer='he_normal')(x)
-        x = BatchNormalization()(x)
-        x = Activation('swish')(x)
-        x = Dropout(dropout_rate)(x)
-        
-        x = Dense(256, kernel_initializer='he_normal')(x)
-        x = BatchNormalization()(x)
-        x = Activation('swish')(x)
-        x = Dropout(dropout_rate)(x)
-        
         x = Dense(128, kernel_initializer='he_normal')(x)
         x = BatchNormalization()(x)
         x = Activation('swish')(x)
+        x = Dropout(dropout_rate)(x)
+        
+        x = Dense(64, kernel_initializer='he_normal')(x)
+        x = BatchNormalization()(x)
+        x = Activation('swish')(x)
+        x = Dropout(dropout_rate)(x)
     
     # Output layer
     outputs = Dense(num_classes, activation='softmax', kernel_initializer='glorot_uniform')(x)
@@ -163,7 +152,7 @@ def build_cnn(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
     
     model.compile(
         optimizer=optimizer,
-        loss='categorical_crossentropy',
+        loss=CategoricalCrossentropy(label_smoothing=0.05),
         metrics=['accuracy']
     )
     
@@ -171,7 +160,7 @@ def build_cnn(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
 
 
 def train_cnn(model, x_train, y_train, x_val, y_val, epochs=100, batch_size=128,
-              model_path='results/cnn_best.h5', verbose=1):
+              model_path='results/cnn_best.keras', verbose=1, class_weight=None):
     """Train CNN model with overfitting prevention.
     
     Args:
@@ -224,6 +213,7 @@ def train_cnn(model, x_train, y_train, x_val, y_val, epochs=100, batch_size=128,
         validation_data=(x_val, y_val),
         epochs=epochs,
         batch_size=batch_size,
+        class_weight=class_weight,
         callbacks=callbacks,
         verbose=verbose
     )

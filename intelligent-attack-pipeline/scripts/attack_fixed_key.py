@@ -90,7 +90,8 @@ def main():
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
     from run_attack import run_experiment
 
-    model_path = os.path.join(args.output_dir, "model_fixed_key.h5")
+    model_path = os.path.join(args.output_dir, "model_fixed_key.keras")
+    results_path = os.path.join(args.output_dir, "fixed_key_results.json")
     history, results, artifacts = run_experiment(
         datafile=args.dataset,
         model_type=args.model,
@@ -99,6 +100,7 @@ def main():
         ascon_mode=True,
         epochs=args.epochs,
         batch_size=args.batch_size,
+        results_path=results_path,
         return_attack_artifacts=True,
     )
 
@@ -107,7 +109,6 @@ def main():
     true_key = int(artifacts["true_key"])
 
     history_path = os.path.join(args.output_dir, "fixed_key_history.json")
-    results_path = os.path.join(args.output_dir, "fixed_key_results.json")
     scores_path = os.path.join(args.output_dir, "fixed_key_key_scores.npy")
     curves_plot = os.path.join(args.output_dir, "fixed_key_training_curves.png")
     rank_plot = os.path.join(args.output_dir, "fixed_key_key_scores.png")

@@ -42,7 +42,7 @@ def run_single_experiment(dataset_path, model_type, variable_key, output_dir, ep
     
     start_time = time.time()
     
-    model_path = f"{output_dir}/{name}_model.h5"
+    model_path = f"{output_dir}/{name}_model.keras"
     history, results = run_experiment(
         dataset_path,
         model_type=model_type,

@@ -88,7 +88,8 @@ def main():
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
     from run_attack import run_experiment
 
-    model_path = os.path.join(args.output_dir, "model_variable_key.h5")
+    model_path = os.path.join(args.output_dir, "model_variable_key.keras")
+    results_path = os.path.join(args.output_dir, "variable_key_results.json")
     history, results, artifacts = run_experiment(
         datafile=args.dataset,
         model_type=args.model,
@@ -97,6 +98,7 @@ def main():
         ascon_mode=True,
         epochs=args.epochs,
         batch_size=args.batch_size,
+        results_path=results_path,
         return_attack_artifacts=True,
     )
 
@@ -104,7 +106,6 @@ def main():
     ranks = np.asarray(artifacts["ranks"], dtype=np.int32)
 
     history_path = os.path.join(args.output_dir, "variable_key_history.json")
-    results_path = os.path.join(args.output_dir, "variable_key_results.json")
     ranks_path = os.path.join(args.output_dir, "variable_key_ranks.npy")
     curves_plot = os.path.join(args.output_dir, "variable_key_training_curves.png")
     rank_plot = os.path.join(args.output_dir, "variable_key_rank_hist.png")

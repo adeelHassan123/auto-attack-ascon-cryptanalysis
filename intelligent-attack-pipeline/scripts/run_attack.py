@@ -24,16 +24,30 @@ from src.attacks.phase4_core import (
 )
 
 
+def _normalize_model_path(model_path):
+    """Force Keras native model format."""
+    base, ext = os.path.splitext(model_path)
+    if ext.lower() == ".keras":
+        return model_path
+    return f"{base}.keras"
+
+
+def _default_results_path(model_path):
+    base, _ = os.path.splitext(model_path)
+    return f"{base}_results.json"
+
+
 def run_experiment(datafile, model_type='mlp', variable_key=False, 
-                   model_path='results/model.h5', ascon_mode=True,
-                   epochs=100, batch_size=None, return_attack_artifacts=False):
+                   model_path='results/model.keras', ascon_mode=True,
+                   epochs=100, batch_size=None, return_attack_artifacts=False,
+                   results_path=None):
     """Run side-channel attack experiment with proper training.
     
     Args:
         datafile: Path to HDF5 dataset
         model_type: 'mlp' or 'cnn'
         variable_key: Use variable-key scenario
-        model_path: Where to save trained model
+        model_path: Where to save trained model (.keras enforced)
         ascon_mode: If True, use ASCON 5-bit S-box (6 classes HW 0-5)
         epochs: Maximum training epochs
         batch_size: Batch size (None = auto-select)
@@ -43,6 +57,7 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
     # Set seeds for reproducibility
     set_global_seeds(42)
     random.seed(42)
+    model_path = _normalize_model_path(model_path)
     
     print(f"Loading dataset: {datafile}")
     with h5py.File(datafile, 'r') as f:
@@ -82,11 +97,27 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
     print(f"  Label distribution: {np.bincount(y, minlength=num_classes)}")
     
     # Stratified split
-    x_train, x_val, y_train, y_val = train_test_split(
-        x, y_cat, test_size=0.2, stratify=y, random_state=42
+    x_train, x_val, y_train, y_val, y_train_idx, _ = train_test_split(
+        x, y_cat, y, test_size=0.2, stratify=y, random_state=42
     )
+
+    # Standardize traces using train-set statistics only.
+    trace_mean = np.mean(x_train, axis=0, dtype=np.float64)
+    trace_std = np.std(x_train, axis=0, dtype=np.float64)
+    trace_std[trace_std < 1e-8] = 1.0
+    x_train = ((x_train - trace_mean) / trace_std).astype(np.float32)
+    x_val = ((x_val - trace_mean) / trace_std).astype(np.float32)
+    x_attack = ((x_attack - trace_mean) / trace_std).astype(np.float32)
+
+    # Balanced class weighting for imbalanced HW classes.
+    counts = np.bincount(y_train_idx, minlength=num_classes)
+    class_weight = {
+        i: float(len(y_train_idx) / (num_classes * max(int(counts[i]), 1)))
+        for i in range(num_classes)
+    }
     
     print(f"  Training samples: {len(x_train)}, Validation samples: {len(x_val)}")
+    print(f"  Class weights: {class_weight}")
     
     # Build model
     print(f"\nBuilding {model_type.upper()} model...")
@@ -113,12 +144,14 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
     if model_type == 'cnn':
         history, model = train_cnn(
             model, x_train, y_train, x_val, y_val,
-            epochs=epochs, batch_size=batch_size, model_path=model_path, verbose=2
+            epochs=epochs, batch_size=batch_size, model_path=model_path, verbose=2,
+            class_weight=class_weight
         )
     else:
         history, model = train_mlp(
             model, x_train, y_train, x_val, y_val,
-            epochs=epochs, batch_size=batch_size, model_path=model_path, verbose=2
+            epochs=epochs, batch_size=batch_size, model_path=model_path, verbose=2,
+            class_weight=class_weight
         )
     
     print(f"\nTraining completed: {len(history.history['loss'])} epochs")
@@ -193,7 +226,9 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
         attack_artifacts = {'ranks': ranks.astype(np.int32)}
     
     # Save results
-    results_path = model_path.replace('.h5', '_results.json')
+    if results_path is None:
+        results_path = _default_results_path(model_path)
+    os.makedirs(os.path.dirname(results_path) if os.path.dirname(results_path) else 'results', exist_ok=True)
     with open(results_path, 'w') as f:
         json.dump(results, f, indent=2)
     print(f"Results saved to {results_path}")
@@ -211,7 +246,7 @@ if __name__ == '__main__':
     parser.add_argument('--variable-key', action='store_true', help='Use variable-key scenario')
     parser.add_argument('--standard-mode', action='store_true', 
                        help='Use standard 8-bit HW (9 classes) instead of ASCON 5-bit (6 classes)')
-    parser.add_argument('--output', default='results/model.h5', help='Output model path')
+    parser.add_argument('--output', default='results/model.keras', help='Output model path')
     parser.add_argument('--epochs', type=int, default=100, help='Max epochs')
     parser.add_argument('--batch-size', type=int, default=None, help='Batch size')
     args = parser.parse_args()

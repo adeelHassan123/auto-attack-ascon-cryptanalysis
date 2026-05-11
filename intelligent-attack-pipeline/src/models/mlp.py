@@ -6,6 +6,7 @@ from tensorflow.keras.layers import (
 from tensorflow.keras import activations
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.losses import CategoricalCrossentropy
 import tensorflow as tf
 import numpy as np
 import random
@@ -115,7 +116,7 @@ def build_mlp(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
     
     model.compile(
         optimizer=optimizer,
-        loss='categorical_crossentropy',
+        loss=CategoricalCrossentropy(label_smoothing=0.05),
         metrics=['accuracy']
     )
     
@@ -123,7 +124,7 @@ def build_mlp(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
 
 
 def train_mlp(model, x_train, y_train, x_val, y_val, epochs=100, batch_size=256,
-              model_path='results/mlp_best.h5', verbose=1):
+              model_path='results/mlp_best.keras', verbose=1, class_weight=None):
     """Train MLP model with overfitting prevention.
     
     Args:
@@ -173,6 +174,7 @@ def train_mlp(model, x_train, y_train, x_val, y_val, epochs=100, batch_size=256,
         validation_data=(x_val, y_val),
         epochs=epochs,
         batch_size=batch_size,
+        class_weight=class_weight,
         callbacks=callbacks,
         verbose=verbose
     )
