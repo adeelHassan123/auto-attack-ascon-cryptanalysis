@@ -3,6 +3,7 @@ import random
 import numpy as np
 
 from src.attacks.key_recovery import compute_ascon_sbox_hw_full, rank_statistics
+from src.utils.metrics_fixed import compute_ascon_sbox_hw
 
 
 def set_global_seeds(seed=42):
@@ -69,7 +70,7 @@ def compute_ascon_first_round_hw(
     return int(compute_ascon_sbox_hw_full(key_full, nonce_arr, column=int(target_byte_position) * 8, rounds=2))
 
 
-def generate_hw_labels(keys, nonces, plaintexts, target_byte=0):
+def generate_hw_labels(keys, nonces, plaintexts, target_byte=0, rounds=0):
     """Generate HW labels from metadata using the corrected ASCON model."""
     keys = np.asarray(keys, dtype=np.uint8)
     nonces = np.asarray(nonces, dtype=np.uint8)
@@ -77,12 +78,8 @@ def generate_hw_labels(keys, nonces, plaintexts, target_byte=0):
     n = keys.shape[0]
     labels = np.zeros(n, dtype=np.uint8)
     for i in range(n):
-        labels[i] = compute_ascon_first_round_hw(
-            key_byte=int(keys[i, target_byte]),
-            nonce=nonces[i],
-            plaintext_byte=int(plaintexts[i, target_byte]),
-            target_byte_position=target_byte,
-            key_template=keys[i],
+        labels[i] = compute_ascon_sbox_hw(
+            keys[i], nonces[i], column=target_byte * 8, rounds=rounds
         )
     return labels
 

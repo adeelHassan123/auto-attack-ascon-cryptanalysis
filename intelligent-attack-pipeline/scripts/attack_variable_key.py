@@ -82,6 +82,12 @@ def main():
     parser.add_argument("--epochs", type=int, default=70, help="Max epochs")
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size override")
     parser.add_argument("--output-dir", default="results/phase4", help="Output directory")
+    parser.add_argument(
+        "--label-rounds",
+        type=int,
+        default=None,
+        help="ASCON HW label rounds (default: HDF5 label_rounds attr or 2). Must match dataset.",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -100,6 +106,7 @@ def main():
         batch_size=args.batch_size,
         results_path=results_path,
         return_attack_artifacts=True,
+        label_rounds=args.label_rounds,
     )
 
     history_dict = history_to_dict(history)

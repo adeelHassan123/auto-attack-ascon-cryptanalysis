@@ -65,6 +65,7 @@ def _select_roi_window(snr, roi_len=400):
     start = min(start, n - L)
     return start, start + L
 
+
 def run_experiment(
     datafile,
     model_type='mlp',
@@ -75,6 +76,7 @@ def run_experiment(
     batch_size=None,
     return_attack_artifacts=False,
     results_path=None,
+    label_rounds=None,
 ):
     """Run side-channel attack experiment.
 
@@ -94,6 +96,7 @@ def run_experiment(
     model_path = _normalize_model_path(model_path)
 
     print(f'Loading dataset: {datafile}')
+    label_rounds_attr = None
     with h5py.File(datafile, 'r') as f:
         target_byte = int(f.attrs.get('target_byte', 0))
 
@@ -109,6 +112,10 @@ def run_experiment(
 
         y_stored = f['Profiling_traces/metadata/sbox_hw'][:] if 'sbox_hw' in f['Profiling_traces/metadata'] else None
 
+        _lr = f.attrs.get('label_rounds', None)
+        if _lr is not None:
+            label_rounds_attr = int(_lr)
+
     x = ensure_trace_length(x, target_len=1551)
     x_attack = ensure_trace_length(x_attack, target_len=1551)
     self_test_phase4_core()
@@ -119,7 +126,15 @@ def run_experiment(
     if not ascon_mode:
         raise ValueError('Standard mode label generation is not implemented for this ASCON pipeline.')
 
-    y = generate_hw_labels(key, nonce, pt, target_byte=target_byte)
+    if label_rounds is not None:
+        rounds_resolved = int(label_rounds)
+    elif label_rounds_attr is not None:
+        rounds_resolved = label_rounds_attr
+    else:
+        rounds_resolved = 2
+    print(f'  ASCON label/attack rounds: {rounds_resolved} (CLI override or HDF5 label_rounds attr, default 2)')
+
+    y = generate_hw_labels(key, nonce, pt, target_byte=target_byte, rounds=rounds_resolved)
     if y_stored is not None:
         mismatch = int(np.sum(y != y_stored))
         if mismatch == 0:
@@ -306,6 +321,7 @@ def run_experiment(
             true_key_byte=fixed_key_byte,
             target_byte=target_byte,
             key_templates=key_templates,
+            rounds=rounds_resolved,
         )
 
         print(f'Fixed-key attack: true byte=0x{fixed_key_byte:02x}, rank={rank}')
@@ -318,6 +334,7 @@ def run_experiment(
             'model': model_type,
             'ascon_mode': ascon_mode,
             'use_nonce_aux': bool(use_nonce_aux),
+            'label_rounds': int(rounds_resolved),
             'target_byte': int(target_byte),
             'true_key': int(fixed_key_byte),
             'rank': int(rank),
@@ -337,7 +354,14 @@ def run_experiment(
             'key_scores': scores.astype(np.float64),
         }
     else:
-        ranks = recover_variable_key_ranks(preds_attack, pt_attack, nonce_attack, key_attack, target_byte=target_byte)
+        ranks = recover_variable_key_ranks(
+            preds_attack,
+            pt_attack,
+            nonce_attack,
+            key_attack,
+            target_byte=target_byte,
+            rounds=rounds_resolved,
+        )
         stats = summarize_variable_ranks(ranks)
 
         print('Variable-key attack statistics:')
@@ -350,6 +374,7 @@ def run_experiment(
             'model': model_type,
             'ascon_mode': ascon_mode,
             'use_nonce_aux': bool(use_nonce_aux),
+            'label_rounds': int(rounds_resolved),
             'target_byte': int(target_byte),
             'epochs_trained': len(history.history['loss']),
             'final_val_acc': float(history.history['val_accuracy'][-1]),
@@ -386,6 +411,12 @@ if __name__ == '__main__':
     parser.add_argument('--output', default='results/model.keras', help='Output model path')
     parser.add_argument('--epochs', type=int, default=100, help='Max epochs')
     parser.add_argument('--batch-size', type=int, default=None, help='Batch size')
+    parser.add_argument(
+        '--label-rounds',
+        type=int,
+        default=None,
+        help='Permutation rounds before probed S-box (0–12). Default: HDF5 attr label_rounds or 2. Must match dataset.',
+    )
     args = parser.parse_args()
 
     run_experiment(
@@ -396,4 +427,5 @@ if __name__ == '__main__':
         ascon_mode=not args.standard_mode,
         epochs=args.epochs,
         batch_size=args.batch_size,
+        label_rounds=args.label_rounds,
     )
