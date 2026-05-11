@@ -47,7 +47,7 @@ def main():
     parser.add_argument("--phase4-dir", default="results/phase4", help="Directory containing Phase 4 outputs")
     parser.add_argument(
         "--output",
-        default="results/phase4/phase4_results_analysis_report.md",
+        default="results/phase4/phase4_results_report.md",
         help="Output markdown report path",
     )
     args = parser.parse_args()
@@ -92,12 +92,16 @@ def main():
     )
     lines.append("")
     lines.append("## 3. Attack Performance (Fixed vs Variable Key)")
-    lines.append("| Metric | Fixed-Key | Variable-Key |")
-    lines.append("|---|---:|---:|")
-    lines.append(f"| Validation Accuracy | {fixed_results['final_val_acc']:.4f} | {variable_results['final_val_acc']:.4f} |")
-    lines.append(f"| Validation Loss | {fixed_results['final_val_loss']:.4f} | {variable_results['final_val_loss']:.4f} |")
-    lines.append(f"| Rank-0 Success Rate | {fixed_results['success_rate']:.4f} | {variable_results['success_rate_rank0']:.4f} |")
-    lines.append(f"| Mean Rank | {fixed_results['rank']:.2f} | {variable_results['mean_rank']:.2f} |")
+    lines.append("| Scenario | Model | Success Rate (rank=0) | Mean Rank | Guessing Entropy (bits) |")
+    lines.append("|---|---|---:|---:|---:|")
+    lines.append(
+        f"| Fixed-key | {fixed_model.upper()} | {fixed_results['success_rate']:.4f} | "
+        f"{fixed_results['rank']:.2f} | {fixed_results.get('guessing_entropy_bits', 0.0):.4f} |"
+    )
+    lines.append(
+        f"| Variable-key | {variable_model.upper()} | {variable_results['success_rate_rank0']:.4f} | "
+        f"{variable_results['mean_rank']:.2f} | {variable_results.get('guessing_entropy_bits', 0.0):.4f} |"
+    )
     lines.append("")
     lines.append("## 4. Key Recovery Results")
     lines.append(f"- Fixed-key rank of true key byte: **{fixed_results['rank']}** (0 means fully recovered).")

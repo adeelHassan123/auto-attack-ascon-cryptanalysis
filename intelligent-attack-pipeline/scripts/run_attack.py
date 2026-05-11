@@ -7,14 +7,20 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import h5py
 import numpy as np
 import json
+import random
 from tensorflow.keras.utils import to_categorical
 from sklearn.model_selection import train_test_split
 
 from src.models.mlp import build_mlp, train_mlp
 from src.models.cnn import build_cnn, train_cnn
-from src.attacks.key_recovery import (
-    generate_labels, key_recovery_from_predictions, 
-    per_trace_variable_key_success, rank_statistics
+from src.attacks.phase4_core import (
+    set_global_seeds,
+    ensure_trace_length,
+    generate_hw_labels,
+    recover_key_byte,
+    recover_variable_key_ranks,
+    summarize_variable_ranks,
+    self_test_phase4_core,
 )
 
 
@@ -35,7 +41,8 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
             (key scores for fixed-key, per-trace ranks for variable-key)
     """
     # Set seeds for reproducibility
-    np.random.seed(42)
+    set_global_seeds(42)
+    random.seed(42)
     
     print(f"Loading dataset: {datafile}")
     with h5py.File(datafile, 'r') as f:
@@ -50,21 +57,26 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
         key_attack = f['Attack_traces/metadata/key'][:]
         nonce_attack = f['Attack_traces/metadata/nonce'][:] if 'nonce' in f['Attack_traces/metadata'] else None
         
-        # Check if dataset has sbox_hw labels
-        y = None
-        if 'sbox_hw' in f['Profiling_traces/metadata']:
-            print("  Using stored S-box HW labels from dataset")
-            y = f['Profiling_traces/metadata/sbox_hw'][:]
+        y_stored = f['Profiling_traces/metadata/sbox_hw'][:] if 'sbox_hw' in f['Profiling_traces/metadata'] else None
+
+    x = ensure_trace_length(x, target_len=1551)
+    x_attack = ensure_trace_length(x_attack, target_len=1551)
+    self_test_phase4_core()
     
     # Set number of classes based on mode
     num_classes = 6 if ascon_mode else 9
     print(f"Using {'ASCON 5-bit S-box (6 classes)' if ascon_mode else 'Standard 8-bit (9 classes)'} mode")
     
-    # Generate labels only if not stored in dataset
-    if y is None:
-        if not ascon_mode:
-            raise ValueError("Standard mode label generation is not implemented for this ASCON pipeline.")
-        y = generate_labels(key, nonce, target_byte=target_byte)
+    # Generate labels from corrected ASCON model (Step 1 requirement).
+    if not ascon_mode:
+        raise ValueError("Standard mode label generation is not implemented for this ASCON pipeline.")
+    y = generate_hw_labels(key, nonce, pt, target_byte=target_byte)
+    if y_stored is not None:
+        mismatch = int(np.sum(y != y_stored))
+        if mismatch == 0:
+            print("  Stored labels verified against recomputed ASCON labels")
+        else:
+            print(f"  WARNING: stored labels mismatch recomputed labels for {mismatch} traces")
     y_cat = to_categorical(y, num_classes=num_classes)
     
     print(f"  Label distribution: {np.bincount(y, minlength=num_classes)}")
@@ -121,12 +133,17 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
     attack_artifacts = {}
     if not variable_key:
         fixed_key_byte = key_attack[0, target_byte]
-        rank, scores = key_recovery_from_predictions(
-            preds_attack, pt_attack, fixed_key_byte, key_attack[0], nonce_attack,
-            target_byte=target_byte, num_classes=num_classes
+        rank, scores = recover_key_byte(
+            preds_attack,
+            pt_attack,
+            nonce_attack,
+            true_key_byte=fixed_key_byte,
+            target_byte=target_byte,
+            key_templates=key_attack,
         )
         print(f"Fixed-key attack: true byte=0x{fixed_key_byte:02x}, rank={rank}")
         success_rate = 1.0 if rank == 0 else 0.0
+        ge_bits = float(np.log2(rank + 1.0))
         print(f"Success rate (rank 0): {success_rate*100:.2f}%")
         
         results = {
@@ -136,6 +153,7 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
             'target_byte': int(target_byte),
             'true_key': int(fixed_key_byte),
             'rank': int(rank),
+            'guessing_entropy_bits': ge_bits,
             'success_rate': float(success_rate),
             'epochs_trained': len(history.history['loss']),
             'final_val_acc': float(history.history['val_accuracy'][-1]),
@@ -147,11 +165,8 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
             'key_scores': scores.astype(np.float64),
         }
     else:
-        ranks = per_trace_variable_key_success(
-            preds_attack, pt_attack, key_attack, nonce=nonce_attack,
-            target_byte=target_byte, num_classes=num_classes
-        )
-        stats = rank_statistics(ranks)
+        ranks = recover_variable_key_ranks(preds_attack, pt_attack, nonce_attack, key_attack, target_byte=target_byte)
+        stats = summarize_variable_ranks(ranks)
         
         print(f"Variable-key attack statistics:")
         print(f"  Mean rank: {stats['mean_rank']:.2f}")

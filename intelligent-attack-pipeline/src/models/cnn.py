@@ -65,7 +65,7 @@ def train_cnn(model, x_train, y_train, x_val, y_val, epochs=100, batch_size=128,
     """Train CNN model with overfitting prevention.
     
     Args:
-        model: Keras model to train
+        model: Keras model to tra`in
         x_train: Training features (N, samples) or (N, samples, 1)
         y_train: Training labels (one-hot)
         x_val: Validation features
