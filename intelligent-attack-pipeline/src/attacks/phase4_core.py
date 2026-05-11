@@ -187,6 +187,17 @@ def summarize_variable_ranks(ranks):
 
 
 def self_test_phase4_core():
-    """One-line sanity checks required by the audit prompt."""
+    """Sanity checks: label path and Numba attack path must agree."""
+    from src.attacks.key_recovery import compute_ascon_sbox_hw_fast, compute_ascon_sbox_hw_full
+
     hw = compute_ascon_first_round_hw(0x00, np.zeros(16, dtype=np.uint8), 0x00, target_byte_position=0)
     assert 0 <= hw <= 5
+
+    rng = np.random.default_rng(12345)
+    for _ in range(32):
+        key = rng.integers(0, 256, 16, dtype=np.uint8)
+        nonce = rng.integers(0, 256, 16, dtype=np.uint8)
+        for col in (0, 8, 24, 40, 56):
+            a = int(compute_ascon_sbox_hw_full(key, nonce, col, 2))
+            b = int(compute_ascon_sbox_hw_fast(key, nonce, col, 2))
+            assert a == b, f'Numba HW mismatch: full={a} fast={b} col={col}'

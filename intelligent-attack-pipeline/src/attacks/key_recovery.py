@@ -137,7 +137,7 @@ def ascon_p12(state):
         ascon_round(state, i)
 
 
-def compute_ascon_sbox_hw_full(key, nonce, column=0, rounds=2):
+def compute_ascon_sbox_hw_full(key, nonce, column=0, rounds=0):
     """Compute S-box output HW after N initialization rounds.
     
     OPTIMAL: After 2 rounds, key bits have diffused for uniform distribution.
@@ -147,7 +147,7 @@ def compute_ascon_sbox_hw_full(key, nonce, column=0, rounds=2):
         key: 16-byte array
         nonce: 16-byte array
         column: Which bit-slice to target (0-63, default 0)
-        rounds: Number of init rounds (default 2, optimal for fixed-key)
+        rounds: Number of init rounds (default 0, optimal for first S-box)
     
     Returns:
         Hamming Weight of S-box output (0-5)
@@ -155,7 +155,7 @@ def compute_ascon_sbox_hw_full(key, nonce, column=0, rounds=2):
     # Initialize state
     state = ascon_init_state(key, nonce)
     
-    # Run N initialization rounds (optimal: 2 rounds for uniform distribution)
+    # Run N initialization rounds (optimal: 0 rounds for first S-box leakage)
     for rnd in range(rounds):
         state[2] ^= RC[rnd]  # Add round constant
         ascon_sbox(state)
@@ -205,31 +205,30 @@ if NUMBA_AVAILABLE:
         hw5 = np.array([0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4,
                         1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5], dtype=np.uint8)
         
-        # Build key and nonce words
-        k0 = (np.uint64(key0) | (np.uint64(key1) << 8) | 
-              (np.uint64(key2) << 16) | (np.uint64(key3) << 24) |
-              (np.uint64(key4) << 32) | (np.uint64(key5) << 40) |
-              (np.uint64(key6) << 48) | (np.uint64(key7) << 56))
-        k1 = (np.uint64(key8) | (np.uint64(key9) << 8) | 
-              (np.uint64(key10) << 16) | (np.uint64(key11) << 24) |
-              (np.uint64(key12) << 32) | (np.uint64(key13) << 40) |
-              (np.uint64(key14) << 48) | (np.uint64(key15) << 56))
-        
-        n0 = (np.uint64(nonce0) | (np.uint64(nonce1) << 8) | 
-              (np.uint64(nonce2) << 16) | (np.uint64(nonce3) << 24) |
-              (np.uint64(nonce4) << 32) | (np.uint64(nonce5) << 40) |
-              (np.uint64(nonce6) << 48) | (np.uint64(nonce7) << 56))
-        n1 = (np.uint64(nonce8) | (np.uint64(nonce9) << 8) | 
-              (np.uint64(nonce10) << 16) | (np.uint64(nonce11) << 24) |
-              (np.uint64(nonce12) << 32) | (np.uint64(nonce13) << 40) |
-              (np.uint64(nonce14) << 48) | (np.uint64(nonce15) << 56))
-        
-        # Initialize state
-        state0 = IV ^ k0
-        state1 = k1
-        state2 = IV ^ n0 ^ k0
-        state3 = n1 ^ k1
-        state4 = IV ^ n0
+        # Build key and nonce words (must match ascon_init_state: big-endian bytes in each uint64)
+        k0 = ((np.uint64(key0) << 56) | (np.uint64(key1) << 48) |
+              (np.uint64(key2) << 40) | (np.uint64(key3) << 32) |
+              (np.uint64(key4) << 24) | (np.uint64(key5) << 16) |
+              (np.uint64(key6) << 8) | np.uint64(key7))
+        k1 = ((np.uint64(key8) << 56) | (np.uint64(key9) << 48) |
+              (np.uint64(key10) << 40) | (np.uint64(key11) << 32) |
+              (np.uint64(key12) << 24) | (np.uint64(key13) << 16) |
+              (np.uint64(key14) << 8) | np.uint64(key15))
+        n0 = ((np.uint64(nonce0) << 56) | (np.uint64(nonce1) << 48) |
+              (np.uint64(nonce2) << 40) | (np.uint64(nonce3) << 32) |
+              (np.uint64(nonce4) << 24) | (np.uint64(nonce5) << 16) |
+              (np.uint64(nonce6) << 8) | np.uint64(nonce7))
+        n1 = ((np.uint64(nonce8) << 56) | (np.uint64(nonce9) << 48) |
+              (np.uint64(nonce10) << 40) | (np.uint64(nonce11) << 32) |
+              (np.uint64(nonce12) << 24) | (np.uint64(nonce13) << 16) |
+              (np.uint64(nonce14) << 8) | np.uint64(nonce15))
+
+        # ASCON-128 init: x0=IV, x1=k[0:8], x2=k[8:16], x3=nonce[0:8], x4=nonce[8:16]
+        state0 = IV
+        state1 = k0
+        state2 = k1
+        state3 = n0
+        state4 = n1
         
         # Run rounds
         for rnd in range(rounds):
@@ -318,12 +317,12 @@ def generate_labels(key, nonce, num_traces=None, target_byte=0):
     target_column = target_byte * 8
     
     for i in range(n):
-        labels[i] = compute_ascon_sbox_hw_full(key[i], nonce[i], target_column, rounds=2)
+        labels[i] = compute_ascon_sbox_hw_full(key[i], nonce[i], target_column, rounds=0)
     
     return labels
-
-
-def compute_ascon_sbox_hw_fast(key, nonce, column=0, rounds=2):
+    
+    
+def compute_ascon_sbox_hw_fast(key, nonce, column=0, rounds=0):
     """Fast HW computation using Numba JIT (for attack evaluation).
     
     Falls back to Python implementation if Numba not available.
@@ -373,7 +372,7 @@ def key_recovery_from_predictions(predictions, pt, true_key_byte, key_full, nonc
         hw_hyp = np.zeros(num_traces, dtype=np.uint8)
         for i in range(num_traces):
             nonce_i = nonce[i] if len(nonce.shape) > 1 else nonce
-            hw_hyp[i] = compute_ascon_sbox_hw_full(key_hyp, nonce_i, target_column, rounds=2)
+            hw_hyp[i] = compute_ascon_sbox_hw_full(key_hyp, nonce_i, target_column, rounds=0)
         
         # Accumulate log probabilities
         probs = predictions[np.arange(num_traces), hw_hyp]
@@ -416,7 +415,7 @@ def per_trace_variable_key_success(predictions, pt, key_bytes, nonce, target_byt
             key_hyp[target_byte] = k_guess
             
             # Compute actual ASCON S-box HW
-            hw = compute_ascon_sbox_hw_full(key_hyp, nonce_i, target_column, rounds=2)
+            hw = compute_ascon_sbox_hw_full(key_hyp, nonce_i, target_column, rounds=0)
             score[k_guess] = np.log(predictions[i, hw] + 1e-36)
         
         rank = np.argsort(-score)
