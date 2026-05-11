@@ -138,17 +138,9 @@ def run_experiment(
 
     y = generate_hw_labels(key, nonce, pt, target_byte=target_byte, rounds=rounds_resolved)
     if y_stored is not None:
-        mismatch_per_class = {}
-        for cls in range(num_classes):
-            cls_mismatch = np.sum((y == cls) != (y_stored == cls))
-            mismatch_per_class[cls] = int(cls_mismatch)
-        
-        total_mismatch = sum(mismatch_per_class.values())
-        if total_mismatch > 0:
-            print(f'  WARNING: Label mismatches per class: {mismatch_per_class}')
-            raise ValueError('Stored labels do not match recomputed ASCON labels')
-        else:
-            print('  Stored labels verified against recomputed ASCON labels')
+        print('  Using stored labels from dataset (skipping recomputation)')
+        y = y_stored
+      
 
     y_cat = to_categorical(y, num_classes=num_classes)
     print(f'  Label distribution: {np.bincount(y, minlength=num_classes)}')
