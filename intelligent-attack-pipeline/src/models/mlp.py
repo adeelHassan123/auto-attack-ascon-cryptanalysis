@@ -3,6 +3,7 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.layers import (
     Dense, Dropout, BatchNormalization, Input, Add, Activation
 )
+from tensorflow.keras import activations
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras.optimizers import Adam
 import tensorflow as tf
@@ -24,7 +25,7 @@ def residual_block(x, units, dropout_rate=0.0):
     # First dense + batch norm + activation
     x = Dense(units, kernel_initializer='he_normal')(x)
     x = BatchNormalization()(x)
-    x = tf.nn.swish(x)  # Swish activation (better than ReLU)
+    x = Activation('swish')(x)  # Swish activation (better than ReLU)
     x = Dropout(dropout_rate)(x)
     
     # Second dense + batch norm
@@ -35,7 +36,7 @@ def residual_block(x, units, dropout_rate=0.0):
     if shortcut.shape[-1] == units:
         x = Add()([shortcut, x])
     
-    x = tf.nn.swish(x)
+    x = Activation('swish')(x)
     x = Dropout(dropout_rate)(x)
     
     return x
@@ -70,7 +71,7 @@ def build_mlp(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
         # DEEPER architecture for variable-key (generalization harder)
         x = Dense(1024, kernel_initializer='he_normal')(inputs)
         x = BatchNormalization()(x)
-        x = tf.nn.swish(x)
+        x = Activation('swish')(x)
         x = Dropout(dropout_rate)(x)
         
         # Residual blocks
@@ -83,13 +84,13 @@ def build_mlp(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
         # Final dense layers
         x = Dense(256, kernel_initializer='he_normal')(x)
         x = BatchNormalization()(x)
-        x = tf.nn.swish(x)
+        x = Activation('swish')(x)
         x = Dropout(dropout_rate)(x)
     else:
         # DEEPER architecture for fixed-key
         x = Dense(512, kernel_initializer='he_normal')(inputs)
         x = BatchNormalization()(x)
-        x = tf.nn.swish(x)
+        x = Activation('swish')(x)
         x = Dropout(dropout_rate)(x)
         
         # Multiple residual blocks
@@ -102,7 +103,7 @@ def build_mlp(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
         # Final dense
         x = Dense(128, kernel_initializer='he_normal')(x)
         x = BatchNormalization()(x)
-        x = tf.nn.swish(x)
+        x = Activation('swish')(x)
     
     # Output layer
     outputs = Dense(num_classes, activation='softmax', kernel_initializer='glorot_uniform')(x)

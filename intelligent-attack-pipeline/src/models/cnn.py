@@ -25,7 +25,7 @@ def conv_residual_block(x, filters, kernel_size=7, dropout_rate=0.0):
     # First conv + batch norm + activation
     x = Conv1D(filters, kernel_size, padding='same', kernel_initializer='he_normal')(x)
     x = BatchNormalization()(x)
-    x = tf.nn.swish(x)
+    x = Activation('swish')(x)
     x = Dropout(dropout_rate)(x)
     
     # Second conv + batch norm
@@ -41,7 +41,7 @@ def conv_residual_block(x, filters, kernel_size=7, dropout_rate=0.0):
         shortcut = BatchNormalization()(shortcut)
         x = Add()([shortcut, x])
     
-    x = tf.nn.swish(x)
+    x = Activation('swish')(x)
     
     return x
 
@@ -77,7 +77,7 @@ def build_cnn(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
         # Initial conv with large kernel for broad feature extraction
         x = Conv1D(128, kernel_size=15, padding='same', kernel_initializer='he_normal')(inputs)
         x = BatchNormalization()(x)
-        x = tf.nn.swish(x)
+        x = Activation('swish')(x)
         x = MaxPooling1D(pool_size=2)(x)
         x = Dropout(dropout_rate)(x)
         
@@ -102,19 +102,19 @@ def build_cnn(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
         # Dense layers
         x = Dense(512, kernel_initializer='he_normal')(x)
         x = BatchNormalization()(x)
-        x = tf.nn.swish(x)
+        x = Activation('swish')(x)
         x = Dropout(dropout_rate)(x)
         
         x = Dense(256, kernel_initializer='he_normal')(x)
         x = BatchNormalization()(x)
-        x = tf.nn.swish(x)
+        x = Activation('swish')(x)
         x = Dropout(dropout_rate)(x)
     else:
         # DEEPER architecture for fixed-key
         # Initial conv
         x = Conv1D(64, kernel_size=11, padding='same', kernel_initializer='he_normal')(inputs)
         x = BatchNormalization()(x)
-        x = tf.nn.swish(x)
+        x = Activation('swish')(x)
         x = MaxPooling1D(pool_size=2)(x)
         
         # Residual blocks
@@ -141,17 +141,17 @@ def build_cnn(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
         # Dense layers
         x = Dense(512, kernel_initializer='he_normal')(x)
         x = BatchNormalization()(x)
-        x = tf.nn.swish(x)
+        x = Activation('swish')(x)
         x = Dropout(dropout_rate)(x)
         
         x = Dense(256, kernel_initializer='he_normal')(x)
         x = BatchNormalization()(x)
-        x = tf.nn.swish(x)
+        x = Activation('swish')(x)
         x = Dropout(dropout_rate)(x)
         
         x = Dense(128, kernel_initializer='he_normal')(x)
         x = BatchNormalization()(x)
-        x = tf.nn.swish(x)
+        x = Activation('swish')(x)
     
     # Output layer
     outputs = Dense(num_classes, activation='softmax', kernel_initializer='glorot_uniform')(x)
