@@ -81,6 +81,12 @@ def main():
     parser.add_argument("--model", choices=["mlp", "cnn"], default="cnn", help="Model type")
     parser.add_argument("--epochs", type=int, default=70, help="Max epochs")
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size override")
+    parser.add_argument(
+        "--class-weight-mode",
+        choices=["auto", "off", "balanced", "tempered"],
+        default="tempered",
+        help="Class weighting policy for training"
+    )
     parser.add_argument("--output-dir", default="results/phase4", help="Output directory")
     args = parser.parse_args()
 
@@ -98,6 +104,7 @@ def main():
         ascon_mode=True,
         epochs=args.epochs,
         batch_size=args.batch_size,
+        class_weight_mode=args.class_weight_mode,
         results_path=results_path,
         return_attack_artifacts=True,
     )

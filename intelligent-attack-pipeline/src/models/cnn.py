@@ -47,7 +47,7 @@ def conv_residual_block(x, filters, kernel_size=7, dropout_rate=0.0):
     return x
 
 
-def build_cnn(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=False):
+def build_cnn(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=False, label_smoothing=0.05):
     """Build STATE-OF-THE-ART CNN with residual connections and batch normalization.
     
     Architecture improvements:
@@ -152,7 +152,7 @@ def build_cnn(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
     
     model.compile(
         optimizer=optimizer,
-        loss=CategoricalCrossentropy(label_smoothing=0.05),
+        loss=CategoricalCrossentropy(label_smoothing=float(label_smoothing)),
         metrics=['accuracy']
     )
     

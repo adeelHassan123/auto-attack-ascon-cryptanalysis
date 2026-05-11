@@ -8,6 +8,7 @@ import h5py
 import numpy as np
 import json
 import random
+import tensorflow as tf
 from tensorflow.keras.utils import to_categorical
 from sklearn.model_selection import train_test_split
 
@@ -37,10 +38,31 @@ def _default_results_path(model_path):
     return f"{base}_results.json"
 
 
+def _balanced_class_weight(y_idx, num_classes):
+    counts = np.bincount(y_idx, minlength=num_classes)
+    n = float(len(y_idx))
+    return {
+        i: float(n / (num_classes * max(int(counts[i]), 1)))
+        for i in range(num_classes)
+    }
+
+
+def _tempered_class_weight(y_idx, num_classes, min_w=0.75, max_w=2.5):
+    """Softer weighting than strict inverse-frequency for stability."""
+    base = _balanced_class_weight(y_idx, num_classes)
+    tempered = {}
+    for i, w in base.items():
+        tw = float(np.sqrt(w))
+        tw = float(np.clip(tw, min_w, max_w))
+        tempered[i] = tw
+    return tempered
+
+
 def run_experiment(datafile, model_type='mlp', variable_key=False, 
                    model_path='results/model.keras', ascon_mode=True,
                    epochs=100, batch_size=None, return_attack_artifacts=False,
-                   results_path=None):
+                   results_path=None,
+                   class_weight_mode='auto'):
     """Run side-channel attack experiment with proper training.
     
     Args:
@@ -53,10 +75,16 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
         batch_size: Batch size (None = auto-select)
         return_attack_artifacts: If True, return per-attack raw artifacts
             (key scores for fixed-key, per-trace ranks for variable-key)
+        class_weight_mode: 'auto' | 'off' | 'balanced' | 'tempered'
     """
     # Set seeds for reproducibility
     set_global_seeds(42)
     random.seed(42)
+    # XLA can trigger very large temporary allocations on T4 for Conv1D backprop.
+    try:
+        tf.config.optimizer.set_jit(False)
+    except Exception:
+        pass
     model_path = _normalize_model_path(model_path)
     
     print(f"Loading dataset: {datafile}")
@@ -109,29 +137,41 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
     x_val = ((x_val - trace_mean) / trace_std).astype(np.float32)
     x_attack = ((x_attack - trace_mean) / trace_std).astype(np.float32)
 
-    # Balanced class weighting for imbalanced HW classes.
-    counts = np.bincount(y_train_idx, minlength=num_classes)
-    class_weight = {
-        i: float(len(y_train_idx) / (num_classes * max(int(counts[i]), 1)))
-        for i in range(num_classes)
-    }
+    # Class weighting policy.
+    class_weight = None
+    if class_weight_mode not in {'auto', 'off', 'balanced', 'tempered'}:
+        raise ValueError("class_weight_mode must be one of: auto, off, balanced, tempered")
+    if class_weight_mode == 'auto':
+        # Fixed-key: avoid aggressive weighting (hurts ranking in practice).
+        # Variable-key: apply softer weighting for imbalance robustness.
+        class_weight = _tempered_class_weight(y_train_idx, num_classes) if variable_key else None
+    elif class_weight_mode == 'balanced':
+        class_weight = _balanced_class_weight(y_train_idx, num_classes)
+    elif class_weight_mode == 'tempered':
+        class_weight = _tempered_class_weight(y_train_idx, num_classes)
     
     print(f"  Training samples: {len(x_train)}, Validation samples: {len(x_val)}")
-    print(f"  Class weights: {class_weight}")
+    if class_weight is None:
+        print("  Class weights: disabled")
+    else:
+        print(f"  Class weights: {class_weight}")
     
     # Build model
     print(f"\nBuilding {model_type.upper()} model...")
+    label_smoothing = 0.05 if variable_key else 0.0
     if model_type == 'cnn':
         model = build_cnn(input_dim=x.shape[1], num_classes=num_classes, 
                          dropout_rate=0.25 if variable_key else 0.0, 
-                         variable_key=variable_key)
+                         variable_key=variable_key,
+                         label_smoothing=label_smoothing)
         # Default batch size for CNN (smaller due to memory)
         if batch_size is None:
-            batch_size = 128
+            batch_size = 64 if variable_key else 32
     else:
         model = build_mlp(input_dim=x.shape[1], num_classes=num_classes,
                          dropout_rate=0.25 if variable_key else 0.0,
-                         variable_key=variable_key)
+                         variable_key=variable_key,
+                         label_smoothing=label_smoothing)
         if batch_size is None:
             batch_size = 256
     
@@ -173,13 +213,14 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
     attack_artifacts = {}
     if not variable_key:
         fixed_key_byte = key_attack[0, target_byte]
+        fixed_template = key_attack[0].copy()
         rank, scores = recover_key_byte(
             preds_attack,
             pt_attack,
             nonce_attack,
             true_key_byte=fixed_key_byte,
             target_byte=target_byte,
-            key_templates=key_attack,
+            key_templates=fixed_template,
         )
         print(f"Fixed-key attack: true byte=0x{fixed_key_byte:02x}, rank={rank}")
         success_rate = 1.0 if rank == 0 else 0.0
@@ -249,7 +290,14 @@ if __name__ == '__main__':
     parser.add_argument('--output', default='results/model.keras', help='Output model path')
     parser.add_argument('--epochs', type=int, default=100, help='Max epochs')
     parser.add_argument('--batch-size', type=int, default=None, help='Batch size')
+    parser.add_argument(
+        '--class-weight-mode',
+        choices=['auto', 'off', 'balanced', 'tempered'],
+        default='auto',
+        help='Class weighting mode'
+    )
     args = parser.parse_args()
     
     run_experiment(args.dataset, args.model, args.variable_key, args.output, 
-                  ascon_mode=not args.standard_mode, epochs=args.epochs, batch_size=args.batch_size)
+                  ascon_mode=not args.standard_mode, epochs=args.epochs, batch_size=args.batch_size,
+                  class_weight_mode=args.class_weight_mode)

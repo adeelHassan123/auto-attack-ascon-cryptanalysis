@@ -43,7 +43,7 @@ def residual_block(x, units, dropout_rate=0.0):
     return x
 
 
-def build_mlp(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=False):
+def build_mlp(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=False, label_smoothing=0.05):
     """Build STATE-OF-THE-ART MLP with residual connections and batch normalization.
     
     Architecture improvements:
@@ -116,7 +116,7 @@ def build_mlp(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
     
     model.compile(
         optimizer=optimizer,
-        loss=CategoricalCrossentropy(label_smoothing=0.05),
+        loss=CategoricalCrossentropy(label_smoothing=float(label_smoothing)),
         metrics=['accuracy']
     )
     
