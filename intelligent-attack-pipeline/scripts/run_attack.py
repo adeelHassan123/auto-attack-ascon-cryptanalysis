@@ -177,13 +177,24 @@ def run_experiment(
     print(f'  Training samples: {len(x_train)}, Validation samples: {len(x_val)}')
 
     print(f'\nBuilding {model_type.upper()} model...')
-    label_smoothing = 0.05 if variable_key else 0.0
+    # Nonce aux makes (trace, nonce) easy to memorize; without regularization train_acc explodes while val stalls.
+    reg_nonce_fixed = bool(use_nonce_aux and not variable_key)
+    if variable_key:
+        label_smoothing = 0.05
+        dropout_rate = 0.25
+    elif reg_nonce_fixed:
+        label_smoothing = 0.04
+        dropout_rate = 0.38
+        print('  Regularization: dropout=0.38 + label_smoothing=0.04 (fixed-key + nonce aux)')
+    else:
+        label_smoothing = 0.0
+        dropout_rate = 0.0
 
     if model_type == 'cnn':
         model = build_cnn(
             input_dim=x_train.shape[1],
             num_classes=num_classes,
-            dropout_rate=0.25 if variable_key else 0.0,
+            dropout_rate=dropout_rate,
             variable_key=variable_key,
             label_smoothing=label_smoothing,
             use_nonce_aux=use_nonce_aux,
@@ -194,7 +205,7 @@ def run_experiment(
         model = build_mlp(
             input_dim=x_train.shape[1],
             num_classes=num_classes,
-            dropout_rate=0.25 if variable_key else 0.0,
+            dropout_rate=dropout_rate,
             variable_key=variable_key,
             label_smoothing=label_smoothing,
             use_nonce_aux=use_nonce_aux,
@@ -207,11 +218,16 @@ def run_experiment(
     print(f'\nTraining for up to {epochs} epochs (batch_size={batch_size})...')
     os.makedirs(os.path.dirname(model_path) if os.path.dirname(model_path) else 'results', exist_ok=True)
 
-    # Keep fixed-key monitoring on val_accuracy; variable-key on val_loss.
+    # Variable-key: val_loss. Fixed-key plain: val_accuracy. Fixed-key + nonce aux: val_loss (val_acc stays ~chance while train memorizes).
     if variable_key:
         monitor = 'val_loss'
         mode = 'min'
         es_patience = 15 if model_type == 'cnn' else 10
+        rlr_patience = 7 if model_type == 'cnn' else 5
+    elif reg_nonce_fixed:
+        monitor = 'val_loss'
+        mode = 'min'
+        es_patience = 18 if model_type == 'cnn' else 12
         rlr_patience = 7 if model_type == 'cnn' else 5
     else:
         monitor = 'val_accuracy'
