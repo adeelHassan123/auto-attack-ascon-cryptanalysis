@@ -2,7 +2,7 @@
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import (
     Conv1D, MaxPooling1D, Dense, Dropout,
-    BatchNormalization, Input, Add, Activation, GlobalAveragePooling1D
+    BatchNormalization, Input, Add, Activation, GlobalAveragePooling1D, Concatenate,
 )
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras.optimizers import Adam
@@ -47,31 +47,23 @@ def conv_residual_block(x, filters, kernel_size=7, dropout_rate=0.0):
     return x
 
 
-def build_cnn(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=False, label_smoothing=0.05):
-    """Build STATE-OF-THE-ART CNN with residual connections and batch normalization.
-    
-    Architecture improvements:
-    - Deep residual blocks (ResNet style)
-    - Batch normalization for stable training
-    - Swish activation (better than ReLU)
-    - Multiple filter sizes (multi-scale feature extraction)
-    - Global average pooling option
-    - He initialization
-    - Adam optimizer with custom learning rate
-    
-    Args:
-        input_dim: Number of input features (trace samples)
-        num_classes: Number of HW classes (0-5 for ASCON 5-bit S-box)
-        dropout_rate: Dropout rate for regularization
-        variable_key: Whether to use variable-key architecture
-    
-    Returns:
-        Compiled Keras model
+def build_cnn(
+    input_dim=1551,
+    num_classes=6,
+    dropout_rate=0.0,
+    variable_key=False,
+    label_smoothing=0.05,
+    use_nonce_aux=False,
+):
+    """Build CNN with optional public-nonce side input (strongly recommended for ASCON init HW).
+
+    When ``use_nonce_aux`` is True, pass training/prediction data as ``[traces, nonce01]`` where
+    ``nonce01`` is float32 shape (N, 16) with bytes scaled to [0, 1] (e.g. uint8 / 255).
     """
     set_random_seeds(42)
-    
-    # Input layer
-    inputs = Input(shape=(input_dim, 1))
+
+    inputs = Input(shape=(input_dim, 1), name='trace')
+    model_inputs = [inputs]
     
     if variable_key:
         # DEEPER architecture for variable-key
@@ -99,7 +91,15 @@ def build_cnn(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
         
         # Global average pooling instead of flatten (reduces parameters)
         x = GlobalAveragePooling1D()(x)
-        
+
+        if use_nonce_aux:
+            nonce_in = Input(shape=(16,), name='nonce')
+            model_inputs.append(nonce_in)
+            nb = Dense(64, kernel_initializer='he_normal')(nonce_in)
+            nb = BatchNormalization()(nb)
+            nb = Activation('swish')(nb)
+            x = Concatenate()([x, nb])
+
         # Dense layers
         x = Dense(512, kernel_initializer='he_normal')(x)
         x = BatchNormalization()(x)
@@ -130,7 +130,15 @@ def build_cnn(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
         x = BatchNormalization()(x)
         x = Activation('swish')(x)
         x = GlobalAveragePooling1D()(x)
-        
+
+        if use_nonce_aux:
+            nonce_in = Input(shape=(16,), name='nonce')
+            model_inputs.append(nonce_in)
+            nb = Dense(64, kernel_initializer='he_normal')(nonce_in)
+            nb = BatchNormalization()(nb)
+            nb = Activation('swish')(nb)
+            x = Concatenate()([x, nb])
+
         # Dense layers
         x = Dense(128, kernel_initializer='he_normal')(x)
         x = BatchNormalization()(x)
@@ -142,10 +150,9 @@ def build_cnn(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
         x = Activation('swish')(x)
         x = Dropout(dropout_rate)(x)
     
-    # Output layer
     outputs = Dense(num_classes, activation='softmax', kernel_initializer='glorot_uniform')(x)
-    
-    model = Model(inputs=inputs, outputs=outputs)
+
+    model = Model(inputs=model_inputs, outputs=outputs)
     
     # Advanced optimizer
     optimizer = Adam(learning_rate=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-7)
@@ -159,10 +166,24 @@ def build_cnn(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
     return model
 
 
-def train_cnn(model, x_train, y_train, x_val, y_val, epochs=100, batch_size=128,
-              model_path='results/cnn_best.keras', verbose=1, class_weight=None,
-              monitor='val_loss', monitor_mode='auto', early_stopping_patience=15,
-              reduce_lr_patience=7):
+def train_cnn(
+    model,
+    x_train,
+    y_train,
+    x_val,
+    y_val,
+    epochs=100,
+    batch_size=128,
+    model_path='results/cnn_best.keras',
+    verbose=1,
+    class_weight=None,
+    monitor='val_loss',
+    monitor_mode='auto',
+    early_stopping_patience=15,
+    reduce_lr_patience=7,
+    nonce_train=None,
+    nonce_val=None,
+):
     """Train CNN model with overfitting prevention.
     
     Args:
@@ -185,7 +206,14 @@ def train_cnn(model, x_train, y_train, x_val, y_val, epochs=100, batch_size=128,
         x_train = x_train.reshape((x_train.shape[0], x_train.shape[1], 1))
     if len(x_val.shape) == 2:
         x_val = x_val.reshape((x_val.shape[0], x_val.shape[1], 1))
-    
+
+    if nonce_train is not None:
+        fit_x_train = [x_train, nonce_train]
+        fit_x_val = [x_val, nonce_val]
+    else:
+        fit_x_train = x_train
+        fit_x_val = x_val
+
     # Create callbacks
     callbacks = [
         EarlyStopping(
@@ -212,10 +240,9 @@ def train_cnn(model, x_train, y_train, x_val, y_val, epochs=100, batch_size=128,
         )
     ]
     
-    # Train model
     history = model.fit(
-        x_train, y_train,
-        validation_data=(x_val, y_val),
+        fit_x_train, y_train,
+        validation_data=(fit_x_val, y_val),
         epochs=epochs,
         batch_size=batch_size,
         class_weight=class_weight,

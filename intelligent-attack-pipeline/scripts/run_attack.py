@@ -136,9 +136,23 @@ def run_experiment(
     y_cat = to_categorical(y, num_classes=num_classes)
     print(f'  Label distribution: {np.bincount(y, minlength=num_classes)}')
 
-    x_train, x_val, y_train, y_val, y_train_idx, _ = train_test_split(
-        x, y_cat, y, test_size=0.2, stratify=y, random_state=42
-    )
+    use_nonce_aux = bool(ascon_mode and nonce is not None)
+    if nonce is not None:
+        x_train, x_val, y_train, y_val, y_train_idx, _, nonce_train, nonce_val = train_test_split(
+            x, y_cat, y, nonce, test_size=0.2, stratify=y, random_state=42
+        )
+    else:
+        x_train, x_val, y_train, y_val, y_train_idx, _ = train_test_split(
+            x, y_cat, y, test_size=0.2, stratify=y, random_state=42
+        )
+        nonce_train = nonce_val = None
+
+    if use_nonce_aux:
+        nonce_train_f = (nonce_train.astype(np.float32) / 255.0).copy()
+        nonce_val_f = (nonce_val.astype(np.float32) / 255.0).copy()
+        print('  Model: trace + public nonce auxiliary input (bytes scaled to [0,1])')
+    else:
+        nonce_train_f = nonce_val_f = None
 
     # ROI selection from profiling training split only.
     snr = _compute_snr(x_train, y_train_idx, num_classes)
@@ -172,6 +186,7 @@ def run_experiment(
             dropout_rate=0.25 if variable_key else 0.0,
             variable_key=variable_key,
             label_smoothing=label_smoothing,
+            use_nonce_aux=use_nonce_aux,
         )
         if batch_size is None:
             batch_size = 64 if variable_key else 32
@@ -182,6 +197,7 @@ def run_experiment(
             dropout_rate=0.25 if variable_key else 0.0,
             variable_key=variable_key,
             label_smoothing=label_smoothing,
+            use_nonce_aux=use_nonce_aux,
         )
         if batch_size is None:
             batch_size = 256
@@ -221,6 +237,8 @@ def run_experiment(
             monitor_mode=mode,
             early_stopping_patience=es_patience,
             reduce_lr_patience=rlr_patience,
+            nonce_train=nonce_train_f,
+            nonce_val=nonce_val_f,
         )
     else:
         history, model = train_mlp(
@@ -238,6 +256,8 @@ def run_experiment(
             monitor_mode=mode,
             early_stopping_patience=es_patience,
             reduce_lr_patience=rlr_patience,
+            nonce_train=nonce_train_f,
+            nonce_val=nonce_val_f,
         )
 
     print(f"\nTraining completed: {len(history.history['loss'])} epochs")
@@ -252,7 +272,15 @@ def run_experiment(
     key_attack = key_attack[:max_attack_traces]
     print(f'  Using {max_attack_traces} attack traces')
 
-    preds_attack = model.predict(x_attack, verbose=0)
+    if model_type == 'cnn':
+        x_pred = x_attack.reshape((x_attack.shape[0], x_attack.shape[1], 1))
+    else:
+        x_pred = x_attack
+    if use_nonce_aux:
+        nonce_attack_f = (nonce_attack.astype(np.float32) / 255.0).copy()
+        preds_attack = model.predict([x_pred, nonce_attack_f], verbose=0)
+    else:
+        preds_attack = model.predict(x_pred, verbose=0)
 
     attack_artifacts = {}
     if not variable_key:
@@ -279,6 +307,7 @@ def run_experiment(
             'scenario': 'fixed-key',
             'model': model_type,
             'ascon_mode': ascon_mode,
+            'use_nonce_aux': bool(use_nonce_aux),
             'target_byte': int(target_byte),
             'true_key': int(fixed_key_byte),
             'rank': int(rank),
@@ -310,6 +339,7 @@ def run_experiment(
             'scenario': 'variable-key',
             'model': model_type,
             'ascon_mode': ascon_mode,
+            'use_nonce_aux': bool(use_nonce_aux),
             'target_byte': int(target_byte),
             'epochs_trained': len(history.history['loss']),
             'final_val_acc': float(history.history['val_accuracy'][-1]),
