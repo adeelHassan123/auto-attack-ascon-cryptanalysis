@@ -97,8 +97,8 @@ def verify_dataset(path, name):
 
 if __name__ == '__main__':
     datasets = sys.argv[1:] if len(sys.argv) > 1 else [
-        "data/datasets/ascon_fixed_key_v2.h5",
-        "data/datasets/ascon_variable_key_v2.h5",
+        "data/datasets/ascon_fixed_key_v3.h5",
+        "data/datasets/ascon_variable_key_v3.h5",
     ]
     
     results = []

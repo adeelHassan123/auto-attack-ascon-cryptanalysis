@@ -84,7 +84,7 @@ def generate_hw_labels(keys, nonces, plaintexts, target_byte=0, rounds=0):
     return labels
 
 
-def recover_key_byte(predictions, plaintexts, nonces, true_key_byte, target_byte=0, key_templates=None):
+def recover_key_byte(predictions, plaintexts, nonces, true_key_byte, target_byte=0, key_templates=None, rounds=0):
     """Recover one key byte using profile model probabilities (OPTIMIZED with Numba).
 
     Args:
@@ -123,7 +123,7 @@ def recover_key_byte(predictions, plaintexts, nonces, true_key_byte, target_byte
             key_hyp = key_templates[i].copy()
             key_hyp[target_byte] = k_guess
             # Fast HW computation
-            hw = compute_ascon_sbox_hw_fast(key_hyp, nonces[i], column=target_column, rounds=0)
+            hw = compute_ascon_sbox_hw_fast(key_hyp, nonces[i], column=target_column, rounds=rounds)
             score += np.log(predictions[i, hw] + 1e-36)
         key_scores[k_guess] = score
         
@@ -136,7 +136,7 @@ def recover_key_byte(predictions, plaintexts, nonces, true_key_byte, target_byte
     return rank, key_scores
 
 
-def recover_variable_key_ranks(predictions, plaintexts, nonces, true_keys, target_byte=0):
+def recover_variable_key_ranks(predictions, plaintexts, nonces, true_keys, target_byte=0, rounds=0):
     """Per-trace key recovery ranks in variable-key scenario (OPTIMIZED with Numba)."""
     from src.attacks.key_recovery import compute_ascon_sbox_hw_fast
     
@@ -157,7 +157,7 @@ def recover_variable_key_ranks(predictions, plaintexts, nonces, true_keys, targe
         for k_guess in range(256):
             key_template[target_byte] = k_guess
             # Fast HW computation with Numba
-            hw = compute_ascon_sbox_hw_fast(key_template, nonces[i], column=target_column, rounds=0)
+            hw = compute_ascon_sbox_hw_fast(key_template, nonces[i], column=target_column, rounds=rounds)
             score[k_guess] = np.log(predictions[i, hw] + 1e-36)
             
         order = np.argsort(-score)
