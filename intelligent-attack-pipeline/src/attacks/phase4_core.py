@@ -67,7 +67,7 @@ def compute_ascon_first_round_hw(
     if nonce_arr.shape != (16,):
         raise ValueError(f"nonce must be 16 bytes, got shape {nonce_arr.shape}")
 
-    return int(compute_ascon_sbox_hw_full(key_full, nonce_arr, column=int(target_byte_position) * 8, rounds=2))
+    return int(compute_ascon_sbox_hw_full(key_full, nonce_arr, column=int(target_byte_position) * 8, rounds=0))
 
 
 def generate_hw_labels(keys, nonces, plaintexts, target_byte=0, rounds=0):
@@ -123,7 +123,7 @@ def recover_key_byte(predictions, plaintexts, nonces, true_key_byte, target_byte
             key_hyp = key_templates[i].copy()
             key_hyp[target_byte] = k_guess
             # Fast HW computation
-            hw = compute_ascon_sbox_hw_fast(key_hyp, nonces[i], column=target_column, rounds=2)
+            hw = compute_ascon_sbox_hw_fast(key_hyp, nonces[i], column=target_column, rounds=0)
             score += np.log(predictions[i, hw] + 1e-36)
         key_scores[k_guess] = score
         
@@ -157,7 +157,7 @@ def recover_variable_key_ranks(predictions, plaintexts, nonces, true_keys, targe
         for k_guess in range(256):
             key_template[target_byte] = k_guess
             # Fast HW computation with Numba
-            hw = compute_ascon_sbox_hw_fast(key_template, nonces[i], column=target_column, rounds=2)
+            hw = compute_ascon_sbox_hw_fast(key_template, nonces[i], column=target_column, rounds=0)
             score[k_guess] = np.log(predictions[i, hw] + 1e-36)
             
         order = np.argsort(-score)
@@ -195,6 +195,6 @@ def self_test_phase4_core():
         key = rng.integers(0, 256, 16, dtype=np.uint8)
         nonce = rng.integers(0, 256, 16, dtype=np.uint8)
         for col in (0, 8, 24, 40, 56):
-            a = int(compute_ascon_sbox_hw_full(key, nonce, col, 2))
-            b = int(compute_ascon_sbox_hw_fast(key, nonce, col, 2))
+            a = int(compute_ascon_sbox_hw_full(key, nonce, col, 0))
+            b = int(compute_ascon_sbox_hw_fast(key, nonce, col, 0))
             assert a == b, f'Numba HW mismatch: full={a} fast={b} col={col}'

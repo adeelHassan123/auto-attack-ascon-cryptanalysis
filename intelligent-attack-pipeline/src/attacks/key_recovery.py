@@ -137,7 +137,7 @@ def ascon_p12(state):
         ascon_round(state, i)
 
 
-def compute_ascon_sbox_hw_full(key, nonce, column=0, rounds=2):
+def compute_ascon_sbox_hw_full(key, nonce, column=0, rounds=0):
     """Compute S-box output HW after N initialization rounds.
     
     OPTIMAL: After 2 rounds, key bits have diffused for uniform distribution.
