@@ -29,8 +29,7 @@ def ensure_trace_length(traces, target_len=1551):
         return x[:, :target_len]
     out = np.zeros((n, target_len), dtype=np.float32)
     out[:, :m] = x
-    if m > 0:
-        out[:, m:] = x[:, [m - 1]]
+    # Don't pad—let zeros indicate "no leakage" (valid for post-execution idle)
     return out
 
 
@@ -131,7 +130,12 @@ def recover_key_byte(predictions, plaintexts, nonces, true_key_byte, target_byte
             print(f"    Progress: {k_guess}/256 key hypotheses")
 
     order = np.argsort(-key_scores)
-    rank = int(np.where(order == int(true_key_byte))[0][0])
+    ranks_of_true = np.where(order == int(true_key_byte))[0]
+    if len(ranks_of_true) > 1:
+        print(f"WARNING: {len(ranks_of_true)} keys tied with true key")
+        rank = int(np.min(ranks_of_true))  # Best-case tie-breaking
+    else:
+        rank = int(ranks_of_true[0])
     print(f"    Attack complete - true key rank: {rank}")
     return rank, key_scores
 
@@ -161,7 +165,11 @@ def recover_variable_key_ranks(predictions, plaintexts, nonces, true_keys, targe
             score[k_guess] = np.log(predictions[i, hw] + 1e-36)
             
         order = np.argsort(-score)
-        ranks[i] = int(np.where(order == int(true_keys[i, target_byte]))[0][0])
+        ranks_of_true = np.where(order == int(true_keys[i, target_byte]))[0]
+        if len(ranks_of_true) > 1:
+            ranks[i] = int(np.min(ranks_of_true))  # Best-case tie-breaking
+        else:
+            ranks[i] = int(ranks_of_true[0])
         
         if i % 500 == 0 and i > 0:
             print(f"    Progress: {i}/{n} traces processed")

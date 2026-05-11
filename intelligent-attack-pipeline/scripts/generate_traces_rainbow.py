@@ -493,6 +493,16 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
         disjoint_keys_ok = len(prof_keys.intersection(atk_keys)) == 0
         if not disjoint_keys_ok:
             raise RuntimeError("Variable-key split is not disjoint by key.")
+        
+        # Additional check at target byte level
+        prof_target_bytes = {k[target_byte] for k in keys[profiling_idx]}
+        atk_target_bytes = {k[target_byte] for k in keys[attack_idx]}
+        
+        if len(prof_target_bytes) < 200 or len(atk_target_bytes) < 200:
+            raise RuntimeError(
+                f"Insufficient key diversity: profiling={len(prof_target_bytes)} "
+                f"target bytes, attack={len(atk_target_bytes)}"
+            )
     
     # Save to HDF5
     # Ensure output directory exists

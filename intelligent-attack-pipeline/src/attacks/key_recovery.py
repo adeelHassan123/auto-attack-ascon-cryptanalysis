@@ -163,11 +163,8 @@ def compute_ascon_sbox_hw_full(key, nonce, column=0, rounds=0):
     
     # Extract 5-bit column AFTER rounds
     col_input = 0
-    col_input |= int((state[0] >> column) & 1) << 4
-    col_input |= int((state[1] >> column) & 1) << 3
-    col_input |= int((state[2] >> column) & 1) << 2
-    col_input |= int((state[3] >> column) & 1) << 1
-    col_input |= int((state[4] >> column) & 1) << 0
+    for i in range(5):
+        col_input |= int((state[i] >> column) & 1) << (4 - i)
     
     # Apply S-box and return HW
     sbox_out = int(ASCON_SBOX[col_input])

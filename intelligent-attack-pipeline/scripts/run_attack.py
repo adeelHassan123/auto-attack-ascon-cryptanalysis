@@ -52,7 +52,9 @@ def _compute_snr(traces, labels, num_classes):
             variances.append(np.var(cls_tr, axis=0) + 1e-12)
     means = np.stack(means, axis=0)
     variances = np.stack(variances, axis=0)
-    snr = np.var(means, axis=0) / np.mean(variances, axis=0)
+    epsilon = 1e-12
+    snr = np.var(means, axis=0) / (np.mean(variances, axis=0) + epsilon)
+    snr = np.clip(snr, 0, 1e6)  # Prevent inf values
     return snr.astype(np.float64)
 
 
@@ -131,21 +133,27 @@ def run_experiment(
     elif label_rounds_attr is not None:
         rounds_resolved = label_rounds_attr
     else:
-        rounds_resolved = 0
-    print(f'  ASCON label/attack rounds: {rounds_resolved} (CLI override or HDF5 label_rounds attr, default 0)')
+        rounds_resolved = 2
+    print(f'  ASCON label/attack rounds: {rounds_resolved} (CLI override or HDF5 label_rounds attr, default 2)')
 
     y = generate_hw_labels(key, nonce, pt, target_byte=target_byte, rounds=rounds_resolved)
     if y_stored is not None:
-        mismatch = int(np.sum(y != y_stored))
-        if mismatch == 0:
-            print('  Stored labels verified against recomputed ASCON labels')
+        mismatch_per_class = {}
+        for cls in range(num_classes):
+            cls_mismatch = np.sum((y == cls) != (y_stored == cls))
+            mismatch_per_class[cls] = int(cls_mismatch)
+        
+        total_mismatch = sum(mismatch_per_class.values())
+        if total_mismatch > 0:
+            print(f'  WARNING: Label mismatches per class: {mismatch_per_class}')
+            raise ValueError('Stored labels do not match recomputed ASCON labels')
         else:
-            print(f'  WARNING: stored labels mismatch recomputed labels for {mismatch} traces')
+            print('  Stored labels verified against recomputed ASCON labels')
 
     y_cat = to_categorical(y, num_classes=num_classes)
     print(f'  Label distribution: {np.bincount(y, minlength=num_classes)}')
 
-    use_nonce_aux = bool(ascon_mode and nonce is not None)
+    use_nonce_aux = bool(ascon_mode and nonce is not None and variable_key)
     if nonce is not None:
         x_train, x_val, y_train, y_val, y_train_idx, _, nonce_train, nonce_val = train_test_split(
             x, y_cat, y, nonce, test_size=0.2, stratify=y, random_state=42
@@ -165,7 +173,8 @@ def run_experiment(
 
     # ROI selection from profiling training split only.
     snr = _compute_snr(x_train, y_train_idx, num_classes)
-    roi_start, roi_end = _select_roi_window(snr, roi_len=400)
+    roi_len = min(max(1000, int(np.sum(snr > np.median(snr)) * 1.5)), 1551)
+    roi_start, roi_end = _select_roi_window(snr, roi_len=roi_len)
     print(f'  ROI (SNR window): [{roi_start}:{roi_end}] len={roi_end - roi_start}')
     print(f'  SNR stats: max={float(np.max(snr)):.6f}, mean={float(np.mean(snr)):.6f}')
 
