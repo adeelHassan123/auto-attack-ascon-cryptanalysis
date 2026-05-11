@@ -513,7 +513,7 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
         f.attrs['ascon_mode'] = True
         f.attrs['fixed_key'] = fixed_key
         f.attrs['target_byte'] = target_byte
-        f.attrs['label_rounds'] = 0
+        f.attrs['label_rounds'] = 2
         f.attrs['num_classes'] = 6
         f.attrs['max_samples'] = max_samples
         f.attrs['max_instructions'] = max_instructions

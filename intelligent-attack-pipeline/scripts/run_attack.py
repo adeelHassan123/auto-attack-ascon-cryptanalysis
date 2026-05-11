@@ -130,11 +130,11 @@ def run_experiment(
 
     if label_rounds is not None:
         rounds_resolved = int(label_rounds)
-    elif label_rounds_attr is not None:
+    elif label_rounds_attr is not None and label_rounds_attr > 0:
         rounds_resolved = label_rounds_attr
     else:
-        rounds_resolved = 0
-    print(f'  ASCON label/attack rounds: {rounds_resolved} (CLI override or HDF5 label_rounds attr, default 0)')
+        rounds_resolved = 2
+    print(f'  ASCON label/attack rounds: {rounds_resolved} (CLI override or HDF5 label_rounds attr, default 2)')
 
     y = generate_hw_labels(key, nonce, pt, target_byte=target_byte, rounds=rounds_resolved)
     if y_stored is not None:
