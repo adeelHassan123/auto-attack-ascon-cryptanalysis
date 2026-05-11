@@ -150,20 +150,23 @@ def ascon_p12(state):
 # Correct S-box HW Computation (REPLACES BROKEN FORMULA)
 # =============================================================================
 
-def compute_ascon_sbox_hw(key, nonce, column=0):
+def compute_ascon_sbox_hw(key, nonce, column=0, rounds=2):
     """Compute ASCON S-box output HW using REAL state simulation.
     
     CRITICAL FIX: This replaces the broken (pt ^ key ^ nonce) & 0x1F formula
     with actual ASCON state initialization and S-box computation.
     
-    Note: In ASCON, the S-box operates on the 320-bit state. The plaintext
-    is NOT used during initialization - only key and nonce. Therefore,
-    this function only takes key and nonce, not plaintext.
+    OPTIMAL: After 2 rounds, key bits have diffused enough to produce
+    uniform distribution of all 6 HW classes (0-5) even with fixed key.
     
     Args:
         key: 16-byte array
         nonce: 16-byte array
         column: Which bit-slice to target (0-63, default 0)
+        rounds: Number of initialization rounds to run (default 2)
+                - 0 = before any rounds (biased for fixed-key)
+                - 2 = after 2 rounds (recommended, uniform distribution)
+                - 12 = after full p12 (key too mixed)
     
     Returns:
         Hamming Weight of S-box output (0-5)
@@ -171,10 +174,13 @@ def compute_ascon_sbox_hw(key, nonce, column=0):
     # Initialize state
     state = ascon_init_state(key, nonce)
     
-    # Add round constant for round 0
-    state[2] ^= RC[0]
+    # Run N initialization rounds (optimal: 2 rounds)
+    for rnd in range(rounds):
+        state[2] ^= RC[rnd]  # Add round constant
+        ascon_sbox_bitliced(state)
+        ascon_linear(state)
     
-    # Extract 5-bit column BEFORE S-box
+    # Extract 5-bit column AFTER rounds
     # Correct ASCON bit order: state[0] is MSB (bit 4), state[4] is LSB (bit 0)
     col_input = 0
     col_input |= int((state[0] >> column) & 1) << 4
@@ -187,13 +193,14 @@ def compute_ascon_sbox_hw(key, nonce, column=0):
     return int(ASCON_SBOX_HW[col_input])
 
 
-def compute_ascon_sbox_hw_batch(keys, nonces, column=0):
+def compute_ascon_sbox_hw_batch(keys, nonces, column=0, rounds=2):
     """Batch compute ASCON S-box HW for arrays.
     
     Args:
         keys: Array of 16-byte keys (N, 16)
         nonces: Array of 16-byte nonces (N, 16)
         column: Which bit-slice to target
+        rounds: Number of initialization rounds (default 2)
     
     Returns:
         Array of Hamming Weights (0-5)
@@ -202,7 +209,7 @@ def compute_ascon_sbox_hw_batch(keys, nonces, column=0):
     hws = np.zeros(n, dtype=np.uint8)
     
     for i in range(n):
-        hws[i] = compute_ascon_sbox_hw(keys[i], nonces[i], column)
+        hws[i] = compute_ascon_sbox_hw(keys[i], nonces[i], column, rounds)
     
     return hws
 

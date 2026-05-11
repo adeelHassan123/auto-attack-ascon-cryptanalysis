@@ -275,7 +275,7 @@ def extract_sbox_hw_from_state(key, nonce, target_byte=0):
     Returns:
         Hamming Weight 0-5 (ASCON 5-bit S-box output)
     """
-    return compute_ascon_sbox_hw(key, nonce, column=target_byte * 8)
+    return compute_ascon_sbox_hw(key, nonce, column=target_byte * 8, rounds=2)
 
 
 def generate_ascon_trace(
@@ -375,7 +375,7 @@ def generate_ascon_trace(
             trace = None
     
     # Calculate S-box HW using REAL ASCON simulation
-    sbox_hw = compute_ascon_sbox_hw(key, nonce, column=0)
+    sbox_hw = compute_ascon_sbox_hw(key, nonce, column=0, rounds=2)
     
     # Verify trace was captured
     if trace is None or len(trace) < 10:
@@ -448,7 +448,7 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
         nonce = np.random.randint(0, 256, 16, dtype=np.uint8)
         
         # Compute ASCON S-box HW using REAL simulation (key + nonce, no plaintext)
-        sbox_hw = compute_ascon_sbox_hw(key, nonce, column=target_byte * 8)
+        sbox_hw = compute_ascon_sbox_hw(key, nonce, column=target_byte * 8, rounds=2)
         
         # Generate trace using Rainbow
         trace, _ = generate_ascon_trace(

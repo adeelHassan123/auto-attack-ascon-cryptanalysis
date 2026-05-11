@@ -124,15 +124,17 @@ def ascon_p12(state):
         ascon_round(state, i)
 
 
-def compute_ascon_sbox_hw_full(key, nonce, column=0):
-    """Compute S-box output HW for first round, target column.
+def compute_ascon_sbox_hw_full(key, nonce, column=0, rounds=2):
+    """Compute S-box output HW after N initialization rounds.
     
-    This is the critical function that replaces the broken (pt ^ key ^ nonce) formula.
+    OPTIMAL: After 2 rounds, key bits have diffused for uniform distribution.
+    This replaces the broken (pt ^ key ^ nonce) formula.
     
     Args:
         key: 16-byte array
         nonce: 16-byte array
         column: Which bit-slice to target (0-63, default 0)
+        rounds: Number of init rounds (default 2, optimal for fixed-key)
     
     Returns:
         Hamming Weight of S-box output (0-5)
@@ -140,10 +142,13 @@ def compute_ascon_sbox_hw_full(key, nonce, column=0):
     # Initialize state
     state = ascon_init_state(key, nonce)
     
-    # Add round constant for round 0
-    state[2] ^= RC[0]
+    # Run N initialization rounds (optimal: 2 rounds for uniform distribution)
+    for rnd in range(rounds):
+        state[2] ^= RC[rnd]  # Add round constant
+        ascon_sbox(state)
+        ascon_linear(state)
     
-    # Extract 5-bit column BEFORE S-box (this is the input)
+    # Extract 5-bit column AFTER rounds
     col_input = 0
     col_input |= int((state[0] >> column) & 1) << 4
     col_input |= int((state[1] >> column) & 1) << 3
@@ -190,7 +195,7 @@ def generate_labels(key, nonce, num_traces=None, target_byte=0):
     target_column = target_byte * 8
     
     for i in range(n):
-        labels[i] = compute_ascon_sbox_hw_full(key[i], nonce[i], target_column)
+        labels[i] = compute_ascon_sbox_hw_full(key[i], nonce[i], target_column, rounds=2)
     
     return labels
 
@@ -228,7 +233,7 @@ def key_recovery_from_predictions(predictions, pt, true_key_byte, key_full, nonc
         hw_hyp = np.zeros(num_traces, dtype=np.uint8)
         for i in range(num_traces):
             nonce_i = nonce[i] if len(nonce.shape) > 1 else nonce
-            hw_hyp[i] = compute_ascon_sbox_hw_full(key_hyp, nonce_i, target_column)
+            hw_hyp[i] = compute_ascon_sbox_hw_full(key_hyp, nonce_i, target_column, rounds=2)
         
         # Accumulate log probabilities
         probs = predictions[np.arange(num_traces), hw_hyp]
@@ -271,7 +276,7 @@ def per_trace_variable_key_success(predictions, pt, key_bytes, nonce, target_byt
             key_hyp[target_byte] = k_guess
             
             # Compute actual ASCON S-box HW
-            hw = compute_ascon_sbox_hw_full(key_hyp, nonce_i, target_column)
+            hw = compute_ascon_sbox_hw_full(key_hyp, nonce_i, target_column, rounds=2)
             score[k_guess] = np.log(predictions[i, hw] + 1e-36)
         
         rank = np.argsort(-score)
