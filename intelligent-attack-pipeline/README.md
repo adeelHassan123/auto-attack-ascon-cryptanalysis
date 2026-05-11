@@ -127,7 +127,7 @@ with h5py.File('data/datasets/fixed_key_dataset.h5', 'r') as f:
 python scripts/run_attack.py \
     --model mlp \
     --dataset data/datasets/fixed_key_dataset.h5 \
-    --output results/models/fixed_mlp.h5
+    --output results/models/fixed_mlp.h5 
 ```
 
 **Fixed-Key CNN:**
