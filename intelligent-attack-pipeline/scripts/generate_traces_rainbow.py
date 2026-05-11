@@ -262,7 +262,7 @@ def setup_rainbow_emulator(elf_path='phase_2/ascon128-c/build/ascon128.elf'):
         raise RuntimeError(f"Rainbow emulator initialization failed: {e}")
 
 
-def extract_sbox_hw_from_state(key, nonce, target_byte=0):
+def extract_sbox_hw_from_state(key, nonce, target_byte=1):
     """Calculate ASCON S-box output HW for first round.
     
     CRITICAL FIX: Uses proper ASCON state simulation from metrics_fixed.py.
@@ -392,7 +392,7 @@ def generate_ascon_trace(
 
 def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True, 
                             output_path='data/datasets/ascon_rainbow_dataset.h5',
-                            target_byte=0, max_samples=1551, max_instructions=0,
+                            target_byte=1, max_samples=1551, max_instructions=0,
                             verbose_trace=False,
                             noise_std=0.0,
                             attack_ratio=0.3, plots_dir='', num_plot_traces=10,
@@ -513,7 +513,7 @@ def create_dataset_rainbow(elf_path, num_traces=60000, fixed_key=True,
         f.attrs['ascon_mode'] = True
         f.attrs['fixed_key'] = fixed_key
         f.attrs['target_byte'] = target_byte
-        f.attrs['label_rounds'] = 2
+        f.attrs['label_rounds'] = 3
         f.attrs['num_classes'] = 6
         f.attrs['max_samples'] = max_samples
         f.attrs['max_instructions'] = max_instructions
