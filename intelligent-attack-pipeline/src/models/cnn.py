@@ -160,7 +160,9 @@ def build_cnn(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
 
 
 def train_cnn(model, x_train, y_train, x_val, y_val, epochs=100, batch_size=128,
-              model_path='results/cnn_best.keras', verbose=1, class_weight=None):
+              model_path='results/cnn_best.keras', verbose=1, class_weight=None,
+              monitor='val_loss', monitor_mode='auto', early_stopping_patience=15,
+              reduce_lr_patience=7):
     """Train CNN model with overfitting prevention.
     
     Args:
@@ -187,21 +189,24 @@ def train_cnn(model, x_train, y_train, x_val, y_val, epochs=100, batch_size=128,
     # Create callbacks
     callbacks = [
         EarlyStopping(
-            monitor='val_loss',
-            patience=15,  # Increased patience for deeper model
+            monitor=monitor,
+            mode=monitor_mode,
+            patience=early_stopping_patience,
             restore_best_weights=True,
             verbose=verbose
         ),
         ReduceLROnPlateau(
-            monitor='val_loss',
+            monitor=monitor,
+            mode=monitor_mode,
             factor=0.5,
-            patience=7,  # Increased patience
+            patience=reduce_lr_patience,
             min_lr=1e-7,
             verbose=verbose
         ),
         ModelCheckpoint(
             model_path,
-            monitor='val_loss',
+            monitor=monitor,
+            mode=monitor_mode,
             save_best_only=True,
             verbose=verbose
         )

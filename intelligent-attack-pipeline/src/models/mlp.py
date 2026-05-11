@@ -124,7 +124,9 @@ def build_mlp(input_dim=1551, num_classes=6, dropout_rate=0.0, variable_key=Fals
 
 
 def train_mlp(model, x_train, y_train, x_val, y_val, epochs=100, batch_size=256,
-              model_path='results/mlp_best.keras', verbose=1, class_weight=None):
+              model_path='results/mlp_best.keras', verbose=1, class_weight=None,
+              monitor='val_loss', monitor_mode='auto', early_stopping_patience=10,
+              reduce_lr_patience=5):
     """Train MLP model with overfitting prevention.
     
     Args:
@@ -146,23 +148,26 @@ def train_mlp(model, x_train, y_train, x_val, y_val, epochs=100, batch_size=256,
     callbacks = [
         # Early stopping: stop if val_loss doesn't improve for 10 epochs
         EarlyStopping(
-            monitor='val_loss',
-            patience=10,
+            monitor=monitor,
+            mode=monitor_mode,
+            patience=early_stopping_patience,
             restore_best_weights=True,
             verbose=verbose
         ),
         # Reduce learning rate when plateau
         ReduceLROnPlateau(
-            monitor='val_loss',
+            monitor=monitor,
+            mode=monitor_mode,
             factor=0.5,
-            patience=5,
+            patience=reduce_lr_patience,
             min_lr=1e-6,
             verbose=verbose
         ),
         # Save best model
         ModelCheckpoint(
             model_path,
-            monitor='val_loss',
+            monitor=monitor,
+            mode=monitor_mode,
             save_best_only=True,
             verbose=verbose
         )

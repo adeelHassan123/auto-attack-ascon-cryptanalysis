@@ -194,18 +194,38 @@ def run_experiment(datafile, model_type='mlp', variable_key=False,
     # Train with callbacks
     print(f"\nTraining for up to {epochs} epochs (batch_size={batch_size})...")
     os.makedirs(os.path.dirname(model_path) if os.path.dirname(model_path) else 'results', exist_ok=True)
+    if variable_key:
+        train_monitor = 'val_loss'
+        train_mode = 'min'
+        es_patience = 15 if model_type == 'cnn' else 10
+        rlr_patience = 7 if model_type == 'cnn' else 5
+    else:
+        # Fixed-key objective tracks ranking better with val_accuracy than val_loss.
+        train_monitor = 'val_accuracy'
+        train_mode = 'max'
+        es_patience = 20 if model_type == 'cnn' else 15
+        rlr_patience = 8 if model_type == 'cnn' else 6
+    print(f"  Callback monitor: {train_monitor} ({train_mode})")
     
     if model_type == 'cnn':
         history, model = train_cnn(
             model, x_train, y_train, x_val, y_val,
             epochs=epochs, batch_size=batch_size, model_path=model_path, verbose=2,
-            class_weight=class_weight
+            class_weight=class_weight,
+            monitor=train_monitor,
+            monitor_mode=train_mode,
+            early_stopping_patience=es_patience,
+            reduce_lr_patience=rlr_patience
         )
     else:
         history, model = train_mlp(
             model, x_train, y_train, x_val, y_val,
             epochs=epochs, batch_size=batch_size, model_path=model_path, verbose=2,
-            class_weight=class_weight
+            class_weight=class_weight,
+            monitor=train_monitor,
+            monitor_mode=train_mode,
+            early_stopping_patience=es_patience,
+            reduce_lr_patience=rlr_patience
         )
     
     print(f"\nTraining completed: {len(history.history['loss'])} epochs")
