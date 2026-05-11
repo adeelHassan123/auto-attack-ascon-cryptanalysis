@@ -3,7 +3,6 @@ import random
 import numpy as np
 
 from src.attacks.key_recovery import compute_ascon_sbox_hw_full, rank_statistics
-from src.utils.metrics_fixed import compute_ascon_sbox_hw
 
 
 def set_global_seeds(seed=42):
@@ -77,7 +76,7 @@ def generate_hw_labels(keys, nonces, plaintexts, target_byte=0, rounds=0):
     n = keys.shape[0]
     labels = np.zeros(n, dtype=np.uint8)
     for i in range(n):
-        labels[i] = compute_ascon_sbox_hw(
+        labels[i] = compute_ascon_sbox_hw_full(
             keys[i], nonces[i], column=target_byte * 8, rounds=rounds
         )
     return labels
