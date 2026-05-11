@@ -88,7 +88,7 @@ def generate_hw_labels(keys, nonces, plaintexts, target_byte=0):
 
 
 def recover_key_byte(predictions, plaintexts, nonces, true_key_byte, target_byte=0, key_templates=None):
-    """Recover one key byte using profile model probabilities.
+    """Recover one key byte using profile model probabilities (OPTIMIZED).
 
     Args:
         predictions: Model output probabilities shape (N, 6).
@@ -101,6 +101,8 @@ def recover_key_byte(predictions, plaintexts, nonces, true_key_byte, target_byte
     Returns:
         (rank, key_scores) where key_scores has shape (256,)
     """
+    from src.utils.metrics_fixed import compute_ascon_sbox_hw_batch
+    
     predictions = np.asarray(predictions, dtype=np.float64)
     plaintexts = np.asarray(plaintexts, dtype=np.uint8)
     nonces = np.asarray(nonces, dtype=np.uint8)
@@ -113,46 +115,61 @@ def recover_key_byte(predictions, plaintexts, nonces, true_key_byte, target_byte
     n = predictions.shape[0]
     key_scores = np.zeros(256, dtype=np.float64)
     idx = np.arange(n)
+    target_column = target_byte * 8
 
+    # OPTIMIZED: Process key guesses with batch HW computation
+    print(f"  Evaluating {n} attack traces against 256 key hypotheses...")
     for k_guess in range(256):
-        hyp_hw = np.zeros(n, dtype=np.uint8)
-        for i in range(n):
-            hyp_hw[i] = compute_ascon_first_round_hw(
-                key_byte=k_guess,
-                nonce=nonces[i],
-                plaintext_byte=int(plaintexts[i, target_byte]),
-                target_byte_position=target_byte,
-                key_template=key_templates[i],
-            )
+        # Create key hypotheses by varying target byte
+        key_hyps = key_templates.copy()
+        key_hyps[:, target_byte] = k_guess
+        
+        # Batch compute HW for all traces at once
+        hyp_hw = compute_ascon_sbox_hw_batch(key_hyps, nonces, column=target_column, rounds=2)
+        
+        # Accumulate log probabilities
         key_scores[k_guess] = np.sum(np.log(predictions[idx, hyp_hw] + 1e-36))
+        
+        if k_guess % 50 == 0:
+            print(f"    Progress: {k_guess}/256 key hypotheses evaluated")
 
     order = np.argsort(-key_scores)
     rank = int(np.where(order == int(true_key_byte))[0][0])
+    print(f"    Attack complete - true key rank: {rank}")
     return rank, key_scores
 
 
 def recover_variable_key_ranks(predictions, plaintexts, nonces, true_keys, target_byte=0):
-    """Per-trace key recovery ranks in variable-key scenario."""
+    """Per-trace key recovery ranks in variable-key scenario (OPTIMIZED)."""
+    from src.utils.metrics_fixed import compute_ascon_sbox_hw
+    
     predictions = np.asarray(predictions, dtype=np.float64)
     plaintexts = np.asarray(plaintexts, dtype=np.uint8)
     nonces = np.asarray(nonces, dtype=np.uint8)
     true_keys = np.asarray(true_keys, dtype=np.uint8)
 
     n = predictions.shape[0]
+    target_column = target_byte * 8
     ranks = np.zeros(n, dtype=np.int32)
+    
+    print(f"  Evaluating variable-key attack for {n} traces...")
     for i in range(n):
         score = np.zeros(256, dtype=np.float64)
+        key_template = true_keys[i].copy()
+        
         for k_guess in range(256):
-            hw = compute_ascon_first_round_hw(
-                key_byte=k_guess,
-                nonce=nonces[i],
-                plaintext_byte=int(plaintexts[i, target_byte]),
-                target_byte_position=target_byte,
-                key_template=true_keys[i],
-            )
+            key_template[target_byte] = k_guess
+            # Use direct function with rounds=2
+            hw = compute_ascon_sbox_hw(key_template, nonces[i], column=target_column, rounds=2)
             score[k_guess] = np.log(predictions[i, hw] + 1e-36)
+            
         order = np.argsort(-score)
         ranks[i] = int(np.where(order == int(true_keys[i, target_byte]))[0][0])
+        
+        if i % 500 == 0 and i > 0:
+            print(f"    Progress: {i}/{n} traces processed")
+    
+    print(f"    Variable-key attack complete - mean rank: {np.mean(ranks):.1f}")
     return ranks
 
 
