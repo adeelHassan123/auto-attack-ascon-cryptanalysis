@@ -57,19 +57,13 @@ def _compute_snr(traces, labels, num_classes):
 
 
 def _select_roi_window(snr, roi_len=400):
-    n = int(snr.shape[0])
+    """Pick the roi_len-wide window centred on the highest-SNR sample."""
+    n = len(snr)
     L = int(min(max(32, roi_len), n))
-    csum = np.cumsum(np.asarray(snr, dtype=np.float64))
-    best_s = 0
-    best_v = -1.0
-    for s in range(0, n - L + 1):
-        e = s + L
-        win = csum[e - 1] - (csum[s - 1] if s > 0 else 0.0)
-        if win > best_v:
-            best_v = win
-            best_s = s
-    return best_s, best_s + L
-
+    peak = int(snr.argmax())
+    start = max(0, peak - L // 2)
+    start = min(start, n - L)
+    return start, start + L
 
 def run_experiment(
     datafile,

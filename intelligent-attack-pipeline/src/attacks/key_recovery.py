@@ -137,7 +137,7 @@ def ascon_p12(state):
         ascon_round(state, i)
 
 
-def compute_ascon_sbox_hw_full(key, nonce, column=0, rounds=0):
+def compute_ascon_sbox_hw_full(key, nonce, column=0, rounds=2):
     """Compute S-box output HW after N initialization rounds.
     
     OPTIMAL: After 2 rounds, key bits have diffused for uniform distribution.
@@ -317,12 +317,12 @@ def generate_labels(key, nonce, num_traces=None, target_byte=0):
     target_column = target_byte * 8
     
     for i in range(n):
-        labels[i] = compute_ascon_sbox_hw_full(key[i], nonce[i], target_column, rounds=0)
+        labels[i] = compute_ascon_sbox_hw_full(key[i], nonce[i], target_column, rounds=2)
     
     return labels
     
     
-def compute_ascon_sbox_hw_fast(key, nonce, column=0, rounds=0):
+def compute_ascon_sbox_hw_fast(key, nonce, column=0, rounds=2):
     """Fast HW computation using Numba JIT (for attack evaluation).
     
     Falls back to Python implementation if Numba not available.
@@ -372,7 +372,7 @@ def key_recovery_from_predictions(predictions, pt, true_key_byte, key_full, nonc
         hw_hyp = np.zeros(num_traces, dtype=np.uint8)
         for i in range(num_traces):
             nonce_i = nonce[i] if len(nonce.shape) > 1 else nonce
-            hw_hyp[i] = compute_ascon_sbox_hw_full(key_hyp, nonce_i, target_column, rounds=0)
+            hw_hyp[i] = compute_ascon_sbox_hw_full(key_hyp, nonce_i, target_column, rounds=2)
         
         # Accumulate log probabilities
         probs = predictions[np.arange(num_traces), hw_hyp]
@@ -415,7 +415,7 @@ def per_trace_variable_key_success(predictions, pt, key_bytes, nonce, target_byt
             key_hyp[target_byte] = k_guess
             
             # Compute actual ASCON S-box HW
-            hw = compute_ascon_sbox_hw_full(key_hyp, nonce_i, target_column, rounds=0)
+            hw = compute_ascon_sbox_hw_full(key_hyp, nonce_i, target_column, rounds=2)
             score[k_guess] = np.log(predictions[i, hw] + 1e-36)
         
         rank = np.argsort(-score)
