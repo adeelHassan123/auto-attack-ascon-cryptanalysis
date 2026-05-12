@@ -81,6 +81,7 @@ def main():
     parser.add_argument("--model", choices=["mlp", "cnn"], default="cnn", help="Model type")
     parser.add_argument("--epochs", type=int, default=70, help="Max epochs")
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size override")
+    parser.add_argument("--roi-len", type=int, default=400, help="ROI window length in samples")
     parser.add_argument("--output-dir", default="results/phase4", help="Output directory")
     parser.add_argument(
         "--label-rounds",
@@ -107,6 +108,7 @@ def main():
         results_path=results_path,
         return_attack_artifacts=True,
         label_rounds=args.label_rounds,
+        roi_len=args.roi_len,
     )
 
     history_dict = history_to_dict(history)

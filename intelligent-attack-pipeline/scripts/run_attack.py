@@ -80,6 +80,7 @@ def run_experiment(
     return_attack_artifacts=False,
     results_path=None,
     label_rounds=None,
+    roi_len=400,
 ):
     """Run side-channel attack experiment.
 
@@ -177,8 +178,8 @@ def run_experiment(
 
     # ROI selection from profiling training split only.
     snr = _compute_snr(x_train, y_train_idx, num_classes)
-    roi_len = 1551  # Use full trace length
     roi_start, roi_end = _select_roi_window(snr, roi_len=roi_len)
+    print(f'  ROI length: {roi_len} samples')
     print(f'  ROI (SNR window): [{roi_start}:{roi_end}] len={roi_end - roi_start}')
     print(f'  SNR stats: max={float(np.max(snr)):.6f}, mean={float(np.mean(snr)):.6f}')
 
