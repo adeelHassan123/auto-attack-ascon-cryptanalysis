@@ -200,9 +200,22 @@ def run_experiment(
     print(f'  Training samples: {len(x_train)}, Validation samples: {len(x_val)}')
 
     # Compute class weights for unbalanced classes
-    class_weights = compute_class_weight('balanced', classes=np.arange(num_classes), y=y_train_idx)
-    class_weights = dict(enumerate(class_weights))
-    print(f'  Class weights: {class_weights}')
+    # class_weights = compute_class_weight('balanced', classes=np.arange(num_classes), y=y_train_idx)
+    # class_weights = dict(enumerate(class_weights))
+    # print(f'  Class weights: {class_weights}')
+
+    present_classes = np.unique(y_train_idx)
+
+    class_weights = compute_class_weight(
+        'balanced',
+        classes=present_classes,
+        y=y_train_idx
+    )
+
+    class_weights = {
+        int(c): float(w)
+        for c, w in zip(present_classes, class_weights)
+    }
 
     print(f'\nBuilding {model_type.upper()} model...')
     # Nonce aux makes (trace, nonce) easy to memorize; without regularization train_acc explodes while val stalls.
